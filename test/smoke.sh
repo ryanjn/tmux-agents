@@ -110,6 +110,8 @@ check "--list of a directory is non-empty" \
   "[ -n \"\$(TMUX_FILE_DIR='$ROOT' TMUX_FILE_MODE=dir '$ROOT/bin/tmux-file-picker.sh' --list)\" ]"
 check "--list is sorted, directories first" \
   "TMUX_FILE_DIR='$ROOT' TMUX_FILE_MODE=dir '$ROOT/bin/tmux-file-picker.sh' --list | head -1 | grep -q '^\.\.$'"
+check "recursive list refuses to walk other apps' data (TCC storm)" \
+  "grep -q \"Library/Group Containers\" '$ROOT/bin/tmux-file-picker.sh'"
 check "--list recursive is non-empty" \
   "[ -n \"\$(TMUX_FILE_DIR='$ROOT' TMUX_FILE_MODE=recursive '$ROOT/bin/tmux-file-picker.sh' --list)\" ]"
 check "agent preview adds a git header for a repo" \

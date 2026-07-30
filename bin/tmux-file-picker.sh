@@ -65,14 +65,34 @@ _list_dir() {
 
 # Every file below here, for fuzzy-finding by name. rg respects .gitignore, so a
 # Next.js checkout doesn't bury you in node_modules; depth-capped find otherwise.
+#
+# ⚠️  macOS: never descend into other apps' data. Walking ~/Library/Containers or
+# Group Containers asks TCC for permission ONCE PER APP, so browsing from $HOME
+# turns into a storm of "would like to access data from other apps" dialogs — and
+# they're attributed to whichever terminal started your tmux server, which may not
+# even be running. CloudStorage is worse than annoying: walking it can pull down
+# every file in your iCloud/Dropbox.
+#
+# Nobody fuzzy-finds source in there, so the fix is free.
 _list_recursive() {
   local d="$1"
   ( cd "$d" 2>/dev/null || exit 0
     if command -v rg >/dev/null 2>&1; then
-      rg --files --hidden --glob '!.git/*' 2>/dev/null | sed 's|^\./||'
+      rg --files --hidden \
+        --glob '!.git/*' \
+        --glob '!Library/Containers/*' \
+        --glob '!Library/Group Containers/*' \
+        --glob '!Library/Application Support/*' \
+        --glob '!Library/CloudStorage/*' \
+        --glob '!Library/Caches/*' \
+        --glob '!.Trash/*' \
+        2>/dev/null | sed 's|^\./||'
     else
       find . -mindepth 1 -maxdepth 6 -type f \
         -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '*/.venv/*' \
+        -not -path '*/Library/Containers/*' -not -path '*/Library/Group Containers/*' \
+        -not -path '*/Library/Application Support/*' -not -path '*/Library/CloudStorage/*' \
+        -not -path '*/Library/Caches/*' -not -path '*/.Trash/*' \
         2>/dev/null | sed 's|^\./||'
     fi | sort -f
   )

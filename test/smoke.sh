@@ -38,6 +38,10 @@ check "no absolute paths to anyone's home" \
   "! grep -rn '/Users/' '$ROOT/bin' '$ROOT/shell' '$ROOT/tmux' '$ROOT/hooks'"
 check "tmux config template has its placeholder" \
   "grep -q '@TMUX_AGENTS_HOME@' '$ROOT/tmux/agents.conf.in'"
+# base-index defaults to 0, and only --with-extras sets it to 1. Any hardcoded
+# ":1" window target silently addresses the wrong window on a default tmux.
+check "no hardcoded window indexes" \
+  "! sed 's/#.*//' '$ROOT/shell/agents.sh' '$ROOT'/bin/*.sh | grep -qE '\-t \"?=?\\\$[A-Za-z_]+:[0-9]'"
 
 printf '\nhelpers\n'
 # shellcheck disable=SC1090

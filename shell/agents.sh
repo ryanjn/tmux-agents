@@ -22,7 +22,7 @@
 # command, and `t` is a popular alias. Check with `type t` before sourcing, or
 # see the README for how to load only the tmux keybindings.
 
-TMUX_AGENTS_VERSION="0.1.0"
+TMUX_AGENTS_VERSION="0.1.1"
 
 command -v tmux >/dev/null 2>&1 || return 0
 
@@ -118,7 +118,7 @@ t() {
 #
 # Detached on purpose: the caller decides whether to jump to it.
 _t_new_session() {
-  local session="$1" dir="${2:-}" win1 pane
+  local session="$1" dir="${2:-}" win1 pane created win_id
 
   case "$session" in
     "")   echo "t: session name can't be empty" >&2; return 2 ;;
@@ -131,8 +131,8 @@ _t_new_session() {
       || { echo "t: could not create a working directory for '$session'" >&2; return 1; }
   fi
 
-  # Window 1 runs the agent, window 2 is a plain shell in the same directory,
-  # one keystroke away (Ctrl+b 2). Named explicitly because Claude Code
+  # The first window runs the agent; the second is a plain shell in the same
+  # directory, one keystroke away (Ctrl+b n). Named explicitly because Claude Code
   # renames the window to its own version string otherwise.
   # Name window 1 after whatever it runs, so a T_AUTOSTART override gets a window
   # named after its own tool rather than "claude".
@@ -142,9 +142,17 @@ _t_new_session() {
 
   _t_session_notes "$dir" "$session" "$win1"
 
-  pane=$(tmux new-session -d -s "$session" -c "$dir" -n "$win1" -P -F '#{pane_id}') || return 1
+  # ⚠️  Capture the WINDOW ID, don't assume the agent window is index 1. With
+  # tmux's default base-index of 0 the agent is window 0 and the shell is window 1,
+  # so `select-window -t "=$session:1"` drops you on the shell — the wrong window,
+  # silently. Ids don't care how anyone has base-index set.
+  created=$(tmux new-session -d -s "$session" -c "$dir" -n "$win1" \
+    -P -F '#{pane_id} #{window_id}') || return 1
+  pane="${created%% *}"
+  win_id="${created##* }"
+  [ -n "$pane" ] || return 1
   tmux new-window -t "=$session" -n shell -c "$dir"
-  tmux select-window -t "=$session:1"
+  tmux select-window -t "$win_id"
 
   # send-keys rather than launching claude as the pane's command, for two
   # reasons: it runs through the interactive shell so your `claude` alias

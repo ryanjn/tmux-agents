@@ -7,15 +7,22 @@
 #
 #   enter    jump to that agent
 #   ctrl-n   start a new agent — named from whatever you've typed in the prompt,
-#            or from a follow-up prompt if you've typed nothing
+#            or from a dialog if you've typed nothing
 #   ctrl-s   start a second agent alongside the highlighted one, same folder
-#   ctrl-x   kill the highlighted agent (asks first), then back to the list
+#   ctrl-x   kill the highlighted agent, after a confirmation dialog
 #   ctrl-f   browse the highlighted agent's files
 #   ctrl-r   refresh the list and previews
 #   esc      cancel
 #
 # ctrl-n costs you fzf's default "move down" binding. Arrows still work, and
 # "new" is the one verb worth a mnemonic key.
+#
+# ctrl-x and ctrl-n do NOT act here. They write what they want to
+# $TMUX_AGENT_REQUEST and exit; tmux-agent-pick.sh then asks the question in a
+# small popup and reopens this picker. That indirection isn't architecture for its
+# own sake: tmux allows one overlay per client, and a dialog opened from inside
+# this popup is silently dropped while reporting success — see the warning in
+# tmux-agent-pick.sh.
 set -u
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,16 +48,20 @@ if [ "${1:-}" = "--list" ]; then
   exit 0
 fi
 
+# One tab-separated line for tmux-agent-pick.sh to act on once this popup is out
+# of the way. Field 4 is the query, so the reopened picker lands where you left it.
+_request() {
+  [ -n "${TMUX_AGENT_REQUEST:-}" ] || return 0
+  printf '%s\t%s\t%s\t%s\n' "$1" "${2:-}" "${3:-}" "${4:-}" > "$TMUX_AGENT_REQUEST"
+}
+
 rows=$(_list)
 
-# With nothing running there's nothing to preview or kill — but "start one" is
-# still the likeliest reason you hit the key, so prompt for a name rather than
-# just reporting an empty list.
+# Nothing running: no list to show, but "start one" is the likeliest reason you
+# pressed the key, so ask for a name instead of reporting an empty box.
 if [ -z "$rows" ]; then
-  printf 'no agents running.  name a new one (enter to cancel): '
-  read -r name || exit 0
-  [ -n "$name" ] || exit 0
-  exec "$DO" new "$name"
+  _request new "" "" ""
+  exit 0
 fi
 
 # --print-query puts the query on line 1 and --expect the key on line 2, so the
@@ -67,6 +78,7 @@ out=$(
     --preview-window='right,60%,border-left' \
     --header='enter jump   ctrl-n new   ctrl-s alongside   ctrl-x kill   ctrl-f files   ctrl-r refresh' \
     --prompt='agent> ' \
+    --query "${TMUX_AGENT_QUERY:-}" \
     --reverse --cycle --height=100% \
     --bind "ctrl-r:reload($0 --list)"
 )
@@ -76,25 +88,28 @@ key=$(printf '%s\n' "$out" | sed -n 2p)
 sel=$(printf '%s\n' "$out" | sed -n 3p)
 
 pane=""
-session=""
 cwd=""
 if [ -n "$sel" ]; then
-  IFS=$'\t' read -r pane session cwd _rest <<< "$sel"
+  IFS=$'\t' read -r pane _session cwd _rest <<< "$sel"
 fi
 
 case "$key" in
 
   ctrl-n)
-    # Whatever you typed to filter the list is almost always the name you want:
-    # prefix + a, type the name, ctrl-n — no second prompt. Only asks when the
-    # query is empty.
-    name="$query"
-    if [ -z "$name" ]; then
-      printf 'new agent name (enter to cancel): '
-      read -r name || exit 0
-    fi
-    [ -n "$name" ] || exit 0
-    exec "$DO" new "$name"
+    # A non-empty query is almost always the name you want, so it goes straight
+    # through and no dialog appears: type it, hit ctrl-n, done.
+    _request new "$query" "" "$query"
+    exit 0
+    ;;
+
+  ctrl-x)
+    [ -n "$pane" ] || exit 0
+    # Ask _t_agent_display for the label rather than scraping it back out of the
+    # display column: it's "api-gateway", or "api-gateway:claude2" when a session
+    # holds two agents, and that's what the question needs to name.
+    label=$(_t_agent_display | awk -F'\t' -v p="$pane" '$1 == p { print $6; exit }')
+    _request kill "$pane" "$label" "$query"
+    exit 0
     ;;
 
   ctrl-s)
@@ -111,23 +126,6 @@ case "$key" in
     export TMUX_FILE_ROOT="$cwd"
     export TMUX_FILE_PANE="$pane"
     exec "$DIR/tmux-file-picker.sh"
-    ;;
-
-  ctrl-x)
-    [ -n "$pane" ] || exit 0
-    # An agent mid-task is the exact thing this setup exists not to lose, so
-    # this one asks, and defaults to no.
-    printf 'kill the agent in %s? [y/N] ' "$session"
-    read -r ans || exit 0
-    case "$ans" in
-      y|Y|yes|YES)
-        "$DO" kill "$pane" || exit 1
-        # Straight back to the list, so clearing out four finished agents is
-        # four keystrokes rather than four trips through the prefix key.
-        exec "$0"
-        ;;
-    esac
-    exit 0
     ;;
 
 esac

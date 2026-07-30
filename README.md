@@ -98,9 +98,13 @@ Every agent, with a live preview of its screen:
 | `enter` | Jump to it |
 | `ctrl-n` | **New agent**, named from whatever you've typed in the prompt |
 | `ctrl-s` | **Second agent beside** the highlighted one, in the same folder |
-| `ctrl-x` | **Kill** it — asks first, then returns to the list so you can clear several |
+| `ctrl-x` | **Kill** it — asks in a small dialog naming the agent, then returns to the list so you can clear several |
 | `ctrl-f` | **Browse its files** |
 | `ctrl-r` | Refresh |
+
+Questions are asked in a 7-line box, not by blanking the list — `ctrl-x` shows
+`Kill the agent in api-gateway?` and defaults to no. Cancel and you're back in the
+list with your query still typed.
 
 No fzf? The binding falls back to a dependency-free tmux menu with the same
 actions on `n` / `s` / `x`.
@@ -194,9 +198,21 @@ yourself:
   at random — press `enter` in one terminal window and a *different* one jumps to
   the agent. The keybindings pass `'#{client_tty}'`, which tmux expands against the
   client that pressed the key, and everything downstream uses `switch-client -c`.
+- **One overlay per client, and a second one fails by returning success.** A
+  `display-popup` from inside a popup does not error — it returns **0** and never
+  runs your command. Built as a confirmation dialog, that reads as "the user said
+  yes", so `ctrl-x` killed agents with no prompt at all. `display-menu` is dropped
+  the same way. Dialogs are therefore driven from *outside* the popup: the picker
+  reports what it wants and exits, `tmux-agent-pick.sh` asks and reopens it.
+  `bin/tmux-dialog.sh` refuses to run inside a popup and exits **2**, so a caller
+  doing `dialog confirm … || exit` can never mistake the failure for an answer.
 - **A popup kills its own background children.** `qlmanage -p file &` never ran at
   all: tmux tears down the popup's process group the moment its command exits.
   Anything that must outlive the popup goes through `tmux run-shell -b`.
+- **`base-index` defaults to 0.** `select-window -t "=$session:1"` looks like "the
+  first window" and is actually the *second* one for anybody who hasn't set
+  `base-index 1` — so `t NAME` dropped you on the shell instead of the agent.
+  Window and pane ids don't care; `test/smoke.sh` now greps for the pattern.
 - **`run-shell` executes under `sh`,** where process substitution is a syntax error.
   One `read x < <(cmd)` anywhere in the sourced helpers silently loses every
   function defined after that line. `test/smoke.sh` checks for it.

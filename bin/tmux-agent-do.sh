@@ -6,10 +6,14 @@
 # same thing however you got there. The logic itself lives in the shell helpers
 # (shell/agents.sh) so it's callable from a plain prompt too.
 #
-#   tmux-agent-do.sh focus     PANE          jump to that agent
-#   tmux-agent-do.sh new       NAME          new agent session named NAME
-#   tmux-agent-do.sh alongside PANE [NAME]   new agent in PANE's session and cwd
-#   tmux-agent-do.sh kill      PANE          kill that agent, and nothing else
+#   tmux-agent-do.sh focus        PANE          jump to that agent
+#   tmux-agent-do.sh new          NAME          new agent session named NAME
+#   tmux-agent-do.sh alongside    PANE [NAME]   new agent in PANE's session and cwd
+#   tmux-agent-do.sh kill         PANE          kill that agent, and nothing else
+#
+# The confirmation dialog for a kill lives in tmux-agent-pick.sh, not here: it has
+# to be opened from outside the picker's popup (tmux allows one overlay per
+# client). These verbs just do the thing they're told.
 #
 # PANE is a tmux pane id (%12), not a session name — see _t_agent_rows for why.
 set -u
@@ -66,7 +70,9 @@ case "$cmd" in
     # should take you to it, not fail. Same contract as `t`.
     if tmux has-session -t "=$name" 2>/dev/null; then
       tmux display-message "agent '$name' already running — switching"
-      _t_focus "$(tmux list-panes -t "=$name:1" -F '#{pane_id}' | head -1)"
+      # -s lists the whole session in window order, so the first pane is the
+      # agent's. Not "=$name:1" — that assumes base-index 1.
+      _t_focus "$(tmux list-panes -s -t "=$name" -F '#{pane_id}' | head -1)"
       exit 0
     fi
 

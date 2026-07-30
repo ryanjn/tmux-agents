@@ -7,6 +7,17 @@ Everything below is judged against that one sentence. A feature earns a place on
 if it removes a decision, a lookup, or a context rebuild — not because it would be
 neat to have.
 
+## Where this is right now
+
+**v0.2.4.** Routing is largely solved: `prefix + j`, waiting times, waiting-first
+ordering, desktop notifications. Each agent's row now also carries what it is
+doing to the machine (`⚙N` processes) and how much context it is carrying
+(`736k`), and the doctor catches a tmux server that has outlived the terminal
+which started it.
+
+**Next: the 0.3 board** — one popup, every agent, last few lines each, built from
+`capture-pane` snapshots. Then the filter keys. Everything else below is unstarted.
+
 ## The five taxes
 
 Running one agent in a terminal is free. Running five costs you, in this order:

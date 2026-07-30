@@ -296,7 +296,9 @@ so you stop opening the picker just to look.
 ./bin/tmux-agents-doctor.sh  # check a live install
 ```
 
-Both run without a tmux server. Issues and PRs welcome — especially Linux
+Both run without a tmux server. **[TESTING.md](TESTING.md) is worth reading before
+you change anything** — testing tmux UI while using tmux has a set of traps that
+produce tests which pass on real bugs, and they're all written down there. Issues and PRs welcome — especially Linux
 polish and zsh completion. The `1.0` section of the roadmap is mostly
 self-contained, well-defined work if you're looking for somewhere to start.
 

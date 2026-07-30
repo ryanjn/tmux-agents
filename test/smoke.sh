@@ -58,23 +58,46 @@ printf '\nrows, sort and age\n'
 # alphabetically hostile: zeta idle, alpha working, mid waiting for 3700s.
 STUB='
 _t_agent_rows() {
-  printf "○\tidle\t%%1\t@1\tzeta\tclaude\t/tmp\ttask\t\n"
-  printf "●\tworking\t%%2\t@2\talpha\tclaude\t/tmp\ttask\t\n"
-  printf "◆\twaiting\t%%3\t@3\tmid\tclaude\t/tmp\ttask\t3700\n"
-  printf "◇\trunning\t%%4\t@4\tbeta\taider\t/tmp\ttask\t\n"
+  printf "○\tidle\t%%1\t@1\tzeta\tclaude\t/tmp\ttask\t\t7200\t101\n"
+  printf "●\tworking\t%%2\t@2\talpha\tclaude\t/tmp\ttask\t\t45\t102\n"
+  printf "◆\twaiting\t%%3\t@3\tmid\tclaude\t/tmp\ttask\t3700\t10\t103\n"
+  printf "◇\trunning\t%%4\t@4\tbeta\taider\t/tmp\ttask\t\t5\t104\n"
 }'
-check "rows carry 9 fields" \
-  "[ \"\$(_t_agent_rows | awk -F'\t' 'NR==1 { print NF }')\" = 9 ] || [ -z \"\$(_t_agent_rows)\" ]"
+check "rows carry 11 fields" \
+  "[ \"\$(_t_agent_rows | awk -F'\t' 'NR==1 { print NF }')\" = 11 ] || [ -z \"\$(_t_agent_rows)\" ]"
 check "waiting sorts first, not alphabetically" \
   "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_agent_display | head -1 | cut -f6 )\" = mid ]"
 check "then working, idle, running" \
   "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_agent_display | cut -f5 | tr '\n' ' ' )\" = 'waiting working idle running ' ]"
 check "age renders as 1h" \
   "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_agent_display | head -1 | cut -f8 )\" = 1h ]"
-check "non-waiting rows have no age" \
-  "[ -z \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_agent_display | sed -n 2p | cut -f8 )\" ]"
+# Superseded: non-waiting rows now carry time-since-last-output. What still has to
+# hold is that a row with nothing to report shows nothing, rather than "0s".
+check "a row with no timing data shows no age" \
+  "[ -z \"\$( . '$ROOT/shell/agents.sh'; _t_agent_rows() { printf '●\tworking\t%%9\t@9\tnone\tc\t/tmp\tt\t\t\t999\n'; }; _t_proc_counts() { :; }; _t_agent_display | cut -f8 )\" ]"
 check "ties sort alphabetically by label" \
   "[ \"\$( . '$ROOT/shell/agents.sh'; _t_agent_rows() { printf '●\tworking\t%%1\t@1\tzeta\tc\t/tmp\tt\t\n●\tworking\t%%2\t@2\talpha\tc\t/tmp\tt\t\n'; }; _t_agent_display | head -1 | cut -f6 )\" = alpha ]"
+
+check "silence shows for a non-waiting agent" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_proc_counts() { :; }; _t_agent_display | sed -n 2p | cut -f8 )\" = 45s ]"
+check "an idle agent shows how long since it last spoke" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_proc_counts() { :; }; _t_agent_display | sed -n 3p | cut -f8 )\" = 2h ]"
+check "waiting time still wins over silence for a waiting agent" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_proc_counts() { :; }; _t_agent_display | head -1 | cut -f8 )\" = 1h ]"
+
+printf '\nprocess fan-out\n'
+check "a busy agent is flagged with its process count" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_proc_counts() { printf '102:37 '; }; _t_agent_display | sed -n 2p | cut -f9 )\" = '⚙37' ]"
+check "a quiet agent is not flagged" \
+  "[ -z \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_proc_counts() { printf '102:3 '; }; _t_agent_display | sed -n 2p | cut -f9 )\" ]"
+check "the threshold is tunable" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_proc_counts() { printf '102:3 '; }; TMUX_AGENT_BUSY_PROCS=2 _t_agent_display | sed -n 2p | cut -f9 )\" = '⚙3' ]"
+check "counting never walks a cycle forever" \
+  "timeout 10 bash -c '. \"$ROOT/shell/agents.sh\"; _t_proc_counts >/dev/null'"
+
+printf '\ndoctor\n'
+check "doctor warns when the server outlives the app that launched it" \
+  "grep -q 'NOT running any more' '$ROOT/bin/tmux-agents-doctor.sh'"
 
 printf '\nnotifications\n'
 NOTIFYLOG=$(mktemp)

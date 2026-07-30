@@ -22,7 +22,7 @@
 # command, and `t` is a popular alias. Check with `type t` before sourcing, or
 # see the README for how to load only the tmux keybindings.
 
-TMUX_AGENTS_VERSION="0.2.0"
+TMUX_AGENTS_VERSION="0.2.1"
 
 command -v tmux >/dev/null 2>&1 || return 0
 
@@ -370,9 +370,17 @@ tl() {
 #
 #   1 glyph   2 status   3 pane_id   4 window_id
 #   5 session   6 window name   7 cwd   8 task   9 seconds waiting
+#   10 seconds since it last printed anything   11 pane pid
 #
 # Field 9 is empty unless the agent is waiting on you. Raw seconds, not "6m": the
 # jump-to-next-waiting binding sorts on it, and formatting is display's problem.
+#
+# Field 10 comes from tmux's own #{window_activity}, so "how long has this been
+# silent" costs nothing to track. It's the only thing that separates an agent
+# thinking hard from one that wedged half an hour ago — the spinner can't.
+#
+# Field 11 is the pane's process, which _t_agent_display uses to count how many
+# processes the agent has spawned underneath it.
 #
 # Fields 3-4 are what every action targets. They're ids (%12, @7), not
 # `session:2.1` coordinates, because `renumber-windows on` reshuffles indexes
@@ -381,7 +389,7 @@ tl() {
 # the same folder, and decide whether killing an agent should take its session
 # with it, without re-querying tmux per row.
 _t_agent_rows() {
-  local s pid pane win wname cwd title first extra_pids entry waitdir waited
+  local s pid pane win wname cwd title act silent first extra_pids entry waitdir waited
   # One clock read for the whole sweep. The while loop below runs in a pipeline
   # subshell, which inherits this.
   local _T_NOW
@@ -402,8 +410,14 @@ _t_agent_rows() {
   # scripts/claude-status-hook.sh.
   waitdir="$HOME/.cache/tmux-agent-status"
 
-  tmux list-panes -a -F '#{session_name}	#{pane_pid}	#{pane_id}	#{window_id}	#{window_name}	#{pane_current_path}	#{pane_title}' 2>/dev/null \
-  | while IFS=$'\t' read -r s pid pane win wname cwd title; do
+  tmux list-panes -a -F '#{session_name}	#{pane_pid}	#{pane_id}	#{window_id}	#{window_name}	#{pane_current_path}	#{pane_title}	#{window_activity}' 2>/dev/null \
+  | while IFS=$'\t' read -r s pid pane win wname cwd title act; do
+      # Seconds since this window last produced output.
+      silent=""
+      case "${act:-}" in
+        ''|*[!0-9]*) ;;
+        *) [ -n "${_T_NOW:-}" ] && silent=$(( _T_NOW - act )) ;;
+      esac
       # --- Claude Code: status is in the pane title ---
       first="${title%% *}"
       if [ "$title" != "$first" ] && [ ${#first} -eq 1 ]; then
@@ -411,15 +425,15 @@ _t_agent_rows() {
           "✳")
             if [ -f "$waitdir/${pane#%}.waiting" ]; then
               waited=$(_t_waited_for "$waitdir/${pane#%}.waiting")
-              _t_row ◆ waiting "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" "$waited"
+              _t_row ◆ waiting "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" "$waited" "$silent" "$pid"
             else
-              _t_row ○ idle "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" ""
+              _t_row ○ idle "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" "" "$silent" "$pid"
             fi
             ;;
           # A tool publishing ◆ itself, with no marker file to date it.
           "◆") _t_row ◆ waiting "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" \
-                 "$(_t_waited_for "$waitdir/${pane#%}.waiting")" ;;
-          *)   _t_row ● working "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" "" ;;
+                 "$(_t_waited_for "$waitdir/${pane#%}.waiting")" "$silent" "$pid" ;;
+          *)   _t_row ● working "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" "" "$silent" "$pid" ;;
         esac
         continue
       fi
@@ -428,14 +442,47 @@ _t_agent_rows() {
       # showing, but we can't claim to know its state.
       for entry in $extra_pids; do
         case "$entry" in
-          "$pid":*) _t_row ◇ running "$pane" "$win" "$s" "$wname" "$cwd" "${entry#*:}" "" ;;
+          "$pid":*) _t_row ◇ running "$pane" "$win" "$s" "$wname" "$cwd" "${entry#*:}" "" "$silent" "$pid" ;;
         esac
       done
     done
 }
 
 # One printf for the row layout, so adding a field means editing one line.
-_t_row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
+_t_row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
+
+# _t_proc_counts — "PID:N PID:N …": how many processes each pane has underneath it.
+#
+# An agent that has fanned out is invisible today. The preview says "Running 1
+# shell command" while a thread pool spawns hundreds of short-lived processes —
+# which is exactly how an afternoon of macOS permission dialogs starts, and how a
+# bulk operation on something important goes unnoticed until it's done.
+#
+# One ps snapshot, then walk each process up to its pane. Deliberately NOT part of
+# _t_agent_rows: that feeds the status line every few seconds and should stay to a
+# single tmux call.
+_t_proc_counts() {
+  local panes
+  panes=$(tmux list-panes -a -F '#{pane_pid}' 2>/dev/null | tr '\n' ' ')
+  [ -n "$panes" ] || return 0
+  ps -axo pid=,ppid= 2>/dev/null | awk -v panes="$panes" '
+    BEGIN { n = split(panes, P, " "); for (i = 1; i <= n; i++) if (P[i] != "") want[P[i]] = 1 }
+    { parent[$1] = $2 }
+    END {
+      for (p in parent) {
+        # Walk up from the parent, so a pane never counts itself. The depth cap is
+        # a guard against a cycle in a truncated ps snapshot, not a real limit.
+        c = parent[p]; d = 0
+        while (c != "" && c != 1 && d < 40) {
+          if (c in want) { cnt[c]++; break }
+          c = parent[c]; d++
+        }
+      }
+      out = ""
+      for (w in want) out = out w ":" (w in cnt ? cnt[w] : 0) " "
+      print out
+    }'
+}
 
 # _t_waited_for FILE — seconds since FILE was last written; empty if it's not
 # there. The waiting marker is written once, when the agent starts waiting, so its
@@ -454,6 +501,12 @@ _t_waited_for() {
 # _t_agent_display — _t_agent_rows with a ready-to-print label attached:
 #
 #   1 pane_id   2 session   3 cwd   4 glyph   5 status   6 label   7 task   8 age
+#   9 process count, but only when it's high enough to be worth saying
+#
+# Field 8 is "how long has it been like this": time waiting for an agent that's
+# waiting on you, time since it last printed anything otherwise. Both answer the
+# same question — is this where I left it? — and the status word beside it says
+# which one you're reading ("waiting 32m", "working 8m", "idle 2h").
 #
 # The label is the bare session name, or "session:window" once that session
 # holds more than one agent — which happens the moment you spawn a sibling with
@@ -474,9 +527,17 @@ _t_waited_for() {
 #
 # Shared by `ta` and the picker so both name and order agents identically.
 _t_agent_display() {
-  _t_agent_rows | awk -F'\t' '
+  local procs
+  procs=$(_t_proc_counts)
+  _t_agent_rows | awk -F'\t' -v procs="$procs" -v busy="${TMUX_AGENT_BUSY_PROCS:-8}" '
     # One place to add a state. Anything unknown sorts last rather than vanishing.
-    BEGIN { rank["waiting"] = 0; rank["working"] = 1; rank["idle"] = 2; rank["running"] = 3 }
+    BEGIN {
+      rank["waiting"] = 0; rank["working"] = 1; rank["idle"] = 2; rank["running"] = 3
+      # k, not n: n is the per-session row counter further down, and awk will not
+      # let you use a name as both a scalar and an array.
+      k = split(procs, P, " ")
+      for (i = 1; i <= k; i++) if (split(P[i], kv, ":") == 2) pcount[kv[1]] = kv[2]
+    }
 
     # Compact on purpose: this column shares a line with the task.
     function age(sec) {
@@ -486,15 +547,22 @@ _t_agent_display() {
       return int(sec / 3600) "h"
     }
 
-    { g[NR]=$1; st[NR]=$2; p[NR]=$3; s[NR]=$5; wn[NR]=$6; c[NR]=$7; t[NR]=$8; a[NR]=$9; n[$5]++ }
+    { g[NR]=$1; st[NR]=$2; p[NR]=$3; s[NR]=$5; wn[NR]=$6; c[NR]=$7; t[NR]=$8; a[NR]=$9
+      sil[NR]=$10; pp[NR]=$11; n[$5]++ }
     END {
       for (i = 1; i <= NR; i++) {
         label = (n[s[i]] > 1) ? s[i] ":" wn[i] : s[i]
         if (length(label) > 30) label = substr(label, 1, 29) "…"
         r = (st[i] in rank) ? rank[st[i]] : 9
-        printf "%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+        # Waiting time for an agent that is waiting on you; silence otherwise.
+        shown = (st[i] == "waiting" && a[i] != "") ? a[i] : sil[i]
+        # Only shown when it means something: a healthy agent runs a couple of
+        # children, a fan-out runs dozens.
+        np = (pp[i] in pcount) ? pcount[pp[i]] : 0
+        procs_col = (np + 0 >= busy + 0) ? "⚙" np : ""
+        printf "%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
                r, (a[i] == "" ? 0 : a[i]), tolower(label),
-               p[i], s[i], c[i], g[i], st[i], label, t[i], age(a[i])
+               p[i], s[i], c[i], g[i], st[i], label, t[i], age(shown), procs_col
       }
     }' | LC_ALL=C sort -t "$(printf '\t')" -k1,1n -k2,2nr -k3,3 | cut -f4-
 }
@@ -504,7 +572,8 @@ ta() {
   # "waiting 6m" rather than a separate column: it belongs with the state, and a
   # column of its own would push the task off a narrow terminal.
   out=$(_t_agent_display | awk -F'\t' '
-    { st = $5 ($8 != "" ? " " $8 : ""); printf "%s\t%s\t%s\t%s\n", $4, st, $6, $7 }')
+    { st = $5 ($8 != "" ? " " $8 : "") ($9 != "" ? " " $9 : "")
+      printf "%s\t%s\t%s\t%s\n", $4, st, $6, $7 }')
 
   if [ -t 1 ]; then
     tput home 2>/dev/null

@@ -57,13 +57,18 @@ choose-tree, which this project's own docs point people at.
 
 *Awareness without navigation.*
 
+Three of these shipped early in **0.2.1**, because the 1Password incident on
+2026-07-30 showed the cheap signals were worth more than waiting for the board:
+last-activity, the `⚙N` fan-out flag, and the doctor's stale-server warning. What
+remains is the board itself and the filter keys.
+
 | Item | Why it cuts switching cost | Size |
 |---|---|---|
 | **The board** — one popup, every agent, last few lines each | Replaces "open picker, arrow down, read, arrow down, read" with one glance. The headline feature of this release | L |
-| **Last-activity time per agent** | Distinguishes "thinking" from "wedged 40 minutes ago", which the spinner cannot | S |
+| ~~**Last-activity time per agent**~~ — **shipped 0.2.1**, from `#{window_activity}`, folded into the same column as waiting time | Distinguishes "thinking" from "wedged 40 minutes ago", which the spinner cannot | S |
 | **Filter keys in the picker** (waiting only / this folder only) | Narrows five agents to the two that matter | S |
-| **"What is this agent doing to my machine?"** — child processes spawned, and whether it's writing outside its own folder | Added 2026-07-30 after an agent fanned out hundreds of `op item edit` processes across a password vault. The screen preview said "Running 1 shell command"; the only real signal was a storm of macOS permission dialogs. Status tells you an agent is *busy*, never that it's busy doing something with a blast radius | M |
-| **Doctor: warn when the tmux server outlives the app that launched it** | Same day: a server started from iTerm 22 hours earlier meant every macOS permission prompt named a dead app, and no amount of clicking Allow could stick. Nothing surfaced that. `#{pid}` + start time + the stale `TERM_PROGRAM` in the global env is all it takes | S |
+| **"What is this agent doing to my machine?"** — ~~child processes spawned~~ (**`⚙N` shipped 0.2.1**), and whether it's writing outside its own folder | Added 2026-07-30 after an agent fanned out hundreds of `op item edit` processes across a password vault. The screen preview said "Running 1 shell command"; the only real signal was a storm of macOS permission dialogs. Status tells you an agent is *busy*, never that it's busy doing something with a blast radius | M |
+| ~~**Doctor: warn when the tmux server outlives the app that launched it**~~ — **shipped 0.2.1** | Same day: a server started from iTerm 22 hours earlier meant every macOS permission prompt named a dead app, and no amount of clicking Allow could stick. Nothing surfaced that. `#{pid}` + start time + the stale `TERM_PROGRAM` in the global env is all it takes | S |
 
 ⚠️ The board is where shell scripting starts to strain — it wants live refresh and
 layout. If it turns into a fight, that's the moment to consider a small compiled

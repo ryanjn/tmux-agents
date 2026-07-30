@@ -113,9 +113,12 @@ Every agent, with a live preview of its screen:
 | `ctrl-f` | **Browse its files** |
 | `ctrl-r` | Refresh |
 
-Each row shows how long an agent has been waiting (`◆ 6m`), and the preview is
-headed with that folder's branch and uncommitted count — so "which agents have
-work I haven't looked at?" is answerable without visiting any of them.
+Each row carries **how long it has been like that** — time waiting for an agent
+that wants you, time since it last printed anything otherwise. `working 40m` is a
+wedged agent; the spinner alone can't tell you that. Rows also show `⚙N` when an
+agent has fanned out into N processes, and the preview is headed with that
+folder's branch and uncommitted count — so "which agents have work I haven't
+looked at?" is answerable without visiting any of them.
 
 Questions are asked in a 7-line box, not by blanking the list — `ctrl-x` shows
 `Kill the agent in api-gateway?` and defaults to no. Cancel and you're back in the
@@ -156,10 +159,11 @@ From the picker, `ctrl-f` browses **the highlighted agent's** folder — so
 
 ```
 $ ta
-◆  waiting 32m  api-gateway      Should I drop the legacy column?
-◆  waiting 4m   payments-api     Which currency should the fallback use?
-●  working      billing-worker   Adding retry backoff
-○  idle         docs-site        Rewrote the install guide
+◆  waiting 32m      api-gateway      Should I drop the legacy column?
+◆  waiting 4m       payments-api     Which currency should the fallback use?
+●  working 2s ⚙41   vault-tagger     Tagging every item in the vault
+●  working 40m      billing-worker   Adding retry backoff
+○  idle 3h          docs-site        Rewrote the install guide
 ```
 
 `t` and `tk` complete from live sessions plus every folder on
@@ -187,6 +191,7 @@ Set these before the helpers are sourced (i.e. above the marker block in your rc
 | `TMUX_AGENT_EXTRA_PROCS` | *(none)* | Agent CLIs to detect by process name, e.g. `"aider codex"` |
 | `TMUX_AGENT_NOTIFY` | *(off)* | `1` sends a desktop notification the moment an agent starts waiting on you |
 | `TMUX_AGENT_NOTIFY_CMD` | *(auto)* | Your own notifier, called as `CMD TITLE MESSAGE`. Otherwise terminal-notifier, osascript, or notify-send |
+| `TMUX_AGENT_BUSY_PROCS` | `8` | How many processes an agent must have spawned before it's flagged `⚙N` |
 
 Running more than one kind of agent? Wrap `t` — bash's dynamic scoping means the
 override applies and then disappears, and the window gets named after the tool:

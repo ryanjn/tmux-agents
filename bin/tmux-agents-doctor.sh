@@ -114,6 +114,36 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+head_ "tmux server"
+# A tmux server outlives the terminal that started it, and macOS keeps attributing
+# every process under it to that original app — so permission prompts name an app
+# that may have quit hours ago, and clicking Allow can't record a durable grant
+# against it. Nothing surfaces that on its own; this does.
+if tmux info >/dev/null 2>&1; then
+  spid=$(tmux display-message -p '#{pid}' 2>/dev/null)
+  sage=$(ps -o etime= -p "$spid" 2>/dev/null | tr -d ' ')
+  ok "server pid $spid, up ${sage:-?}"
+
+  launcher=$(tmux show-environment -g __CFBundleIdentifier 2>/dev/null | sed -n 's/^__CFBundleIdentifier=//p')
+  lname=$(tmux show-environment -g TERM_PROGRAM 2>/dev/null | sed -n 's/^TERM_PROGRAM=//p')
+  if [ -n "$launcher" ] && command -v lsappinfo >/dev/null 2>&1; then
+    if [ -z "$(lsappinfo find "bundleid=$launcher" 2>/dev/null)" ]; then
+      warn "started from ${lname:-$launcher}, which is NOT running any more"
+      printf '      %smacOS attributes every process in every pane to that app. Permission%s\n' "$DIM" "$Z"
+      printf '      %sprompts will name it, and Allow will not stick because the app is gone.%s\n' "$DIM" "$Z"
+      printf '      %sFix: restart the server from your current terminal when convenient —%s\n' "$DIM" "$Z"
+      printf '      %sit kills running agents, so pick your moment.%s\n' "$DIM" "$Z"
+    else
+      ok "started from ${lname:-$launcher}, still running"
+    fi
+  elif [ -n "$lname" ]; then
+    warn "started from $lname (can't tell whether it's still running)"
+  fi
+else
+  warn "no tmux server running"
+fi
+
+# ---------------------------------------------------------------------------
 head_ "Shell helpers"
 # shellcheck disable=SC1090
 if [ -r "$HOME_DIR/shell/agents.sh" ] && . "$HOME_DIR/shell/agents.sh" 2>/dev/null; then

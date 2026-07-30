@@ -45,7 +45,8 @@ fi
 # ordering comes from _t_agent_display and fzf preserves it for an empty query.
 _list() {
   _t_agent_display |
-    awk -F'\t' '{ printf "%s\t%s\t%s\t%s %-4s %-30s %s\n", $1, $2, $3, $4, $8, $6, $7 }'
+    awk -F'\t' '{ printf "%s\t%s\t%s\t%s %-4s %-30s %s%s\n",
+                   $1, $2, $3, $4, $8, $6, ($9 != "" ? $9 "  " : ""), $7 }'
 }
 
 # ---------------------------------------------------------------------------

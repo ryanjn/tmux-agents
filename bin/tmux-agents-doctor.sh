@@ -55,7 +55,8 @@ esac
 head_ "Files"
 for f in bin/tmux-agent-pick.sh bin/tmux-agent-picker.sh bin/tmux-agent-menu.sh \
          bin/tmux-agent-do.sh bin/tmux-agent-status.sh bin/tmux-file-pick.sh \
-         bin/tmux-file-picker.sh shell/agents.sh; do
+         bin/tmux-file-picker.sh bin/tmux-agent-next.sh bin/tmux-agent-notify.sh \
+         bin/tmux-dialog.sh shell/agents.sh; do
   if [ ! -f "$HOME_DIR/$f" ]; then bad "missing $f"
   elif [ ! -x "$HOME_DIR/$f" ] && [ "${f#bin/}" != "$f" ]; then bad "$f is not executable (run ./install.sh)"
   else ok "$f"
@@ -86,6 +87,11 @@ if tmux info >/dev/null 2>&1; then
     ok "prefix + a is bound in the running server"
   else
     bad "prefix + a is NOT bound — run: tmux source-file ~/.tmux.conf"
+  fi
+  if tmux list-keys 2>/dev/null | grep -q 'tmux-agent-next'; then
+    ok "prefix + j jumps to the waiting agent"
+  else
+    warn "prefix + j is not bound — re-run ./install.sh, then reload tmux"
   fi
   if tmux list-keys 2>/dev/null | grep -q 'tmux-file-pick'; then
     ok "prefix + f is bound in the running server"
@@ -138,6 +144,22 @@ if [ -f "$SETTINGS" ] && grep -q 'claude-status-hook' "$SETTINGS" 2>/dev/null; t
 else
   warn "not wired up: ✳ will mean both 'finished' and 'waiting on you'"
   printf '      %ssee %s/hooks/README.md%s\n' "$DIM" "$HOME_DIR" "$Z"
+fi
+
+if [ "${TMUX_AGENT_NOTIFY:-}" = 1 ]; then
+  if [ -n "${TMUX_AGENT_NOTIFY_CMD:-}" ]; then
+    ok "desktop notifications on, via \$TMUX_AGENT_NOTIFY_CMD"
+  elif command -v terminal-notifier >/dev/null 2>&1; then
+    ok "desktop notifications on (terminal-notifier)"
+  elif [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+    ok "desktop notifications on (osascript)"
+  elif command -v notify-send >/dev/null 2>&1; then
+    ok "desktop notifications on (notify-send)"
+  else
+    warn "TMUX_AGENT_NOTIFY=1 but no notifier found — nothing will be sent"
+  fi
+else
+  warn "desktop notifications off (export TMUX_AGENT_NOTIFY=1 to enable)"
 fi
 
 # ---------------------------------------------------------------------------

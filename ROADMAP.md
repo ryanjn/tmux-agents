@@ -23,21 +23,27 @@ Navigation — physically getting to an agent — used to be a sixth. `prefix + 
 solved it, and that's the model for the rest: the answer is usually *one keystroke
 that removes a decision*, not a bigger interface.
 
-## Where 0.1.2 already lands
+## Where 0.2.0 lands
 
 | Tax | Covered by | Gap |
 |---|---|---|
-| Routing | `◆ waiting` state, status-line counts | You still have to look, then choose. Nothing takes you to the one that's waiting |
-| Reconstruction | Live screen preview, seeded `CLAUDE.md` provenance | Nothing about *code* state: no branch, no dirty files, no diff |
+| Routing | `prefix + j`, waiting times, waiting-first order, opt-in notifications | **Largely handled.** Next gap: nothing tells you an agent is *stuck* rather than thinking |
+| Reconstruction | Screen preview, branch + uncommitted count, seeded `CLAUDE.md` | No diff — you can see that work exists, not what it is |
 | Awareness | The picker list | One agent at a time, and only while the popup is open |
 | Handoff | `ctrl-y` copies a path | You paste it yourself, into an agent you navigate to yourself |
 | Ceremony | `t NAME`, `ts`, folder + notes auto-created | One shape of session only; no worktrees, no multi-window profiles |
 
 ---
 
-## 0.2 — Never wonder who needs you
+## 0.2 — Never wonder who needs you — **shipped in 0.2.0**
 
 *Routing should cost zero decisions.*
+
+All five landed. One change from the plan: the list sorts **longest-waiting first**
+within the waiting group rather than alphabetically, so the top row is always the
+one `prefix + j` would take you to — two orderings that disagreed would be worse
+than either alone. And the key is `prefix + j`, not `prefix + w`: `w` is
+choose-tree, which this project's own docs point people at.
 
 | Item | Why it cuts switching cost | Size |
 |---|---|---|

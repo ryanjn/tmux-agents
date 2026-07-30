@@ -22,6 +22,17 @@
 bind a run-shell "@TMUX_AGENTS_HOME@/bin/tmux-agent-pick.sh '#{client_tty}'"
 
 # ---------------------------------------------------------------------------
+# prefix + j — jump to whoever is waiting on you
+# ---------------------------------------------------------------------------
+# Goes to the agent that has been waiting longest. Press it again for the next
+# one; it tells you how many are left. No list, no choosing.
+#
+# `j` for jump, and deliberately not `w`: that's tmux's choose-tree, which this
+# project's own docs point people at as the replacement for the find-window
+# binding that prefix + f takes over.
+bind j run-shell "@TMUX_AGENTS_HOME@/bin/tmux-agent-next.sh '#{client_tty}'"
+
+# ---------------------------------------------------------------------------
 # prefix + f — the file browser
 # ---------------------------------------------------------------------------
 # Browse, preview and open the files the agent in this pane is working on.

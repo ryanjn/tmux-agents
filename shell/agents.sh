@@ -369,7 +369,10 @@ tl() {
 # Each row is eight tab-separated fields:
 #
 #   1 glyph   2 status   3 pane_id   4 window_id
-#   5 session   6 window name   7 cwd   8 task
+#   5 session   6 window name   7 cwd   8 task   9 seconds waiting
+#
+# Field 9 is empty unless the agent is waiting on you. Raw seconds, not "6m": the
+# jump-to-next-waiting binding sorts on it, and formatting is display's problem.
 #
 # Fields 3-4 are what every action targets. They're ids (%12, @7), not
 # `session:2.1` coordinates, because `renumber-windows on` reshuffles indexes
@@ -378,7 +381,11 @@ tl() {
 # the same folder, and decide whether killing an agent should take its session
 # with it, without re-querying tmux per row.
 _t_agent_rows() {
-  local s pid pane win wname cwd title first extra_pids entry waitdir
+  local s pid pane win wname cwd title first extra_pids entry waitdir waited
+  # One clock read for the whole sweep. The while loop below runs in a pipeline
+  # subshell, which inherits this.
+  local _T_NOW
+  _T_NOW=$(date +%s 2>/dev/null)
   extra_pids=""
   if [ -n "${TMUX_AGENT_EXTRA_PROCS:-}" ]; then
     # "pid:name", so the row can say which tool it found. The regex keeps the
@@ -403,13 +410,16 @@ _t_agent_rows() {
         case "$first" in
           "✳")
             if [ -f "$waitdir/${pane#%}.waiting" ]; then
-              _t_row ◆ waiting "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }"
+              waited=$(_t_waited_for "$waitdir/${pane#%}.waiting")
+              _t_row ◆ waiting "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" "$waited"
             else
-              _t_row ○ idle "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }"
+              _t_row ○ idle "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" ""
             fi
             ;;
-          "◆") _t_row ◆ waiting "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" ;;
-          *)   _t_row ● working "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" ;;
+          # A tool publishing ◆ itself, with no marker file to date it.
+          "◆") _t_row ◆ waiting "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" \
+                 "$(_t_waited_for "$waitdir/${pane#%}.waiting")" ;;
+          *)   _t_row ● working "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" "" ;;
         esac
         continue
       fi
@@ -418,18 +428,32 @@ _t_agent_rows() {
       # showing, but we can't claim to know its state.
       for entry in $extra_pids; do
         case "$entry" in
-          "$pid":*) _t_row ◇ running "$pane" "$win" "$s" "$wname" "$cwd" "${entry#*:}" ;;
+          "$pid":*) _t_row ◇ running "$pane" "$win" "$s" "$wname" "$cwd" "${entry#*:}" "" ;;
         esac
       done
     done
 }
 
 # One printf for the row layout, so adding a field means editing one line.
-_t_row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
+_t_row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
+
+# _t_waited_for FILE — seconds since FILE was last written; empty if it's not
+# there. The waiting marker is written once, when the agent starts waiting, so its
+# mtime is the timestamp and there's nothing extra to record.
+#
+# stat's flags differ by platform and neither build accepts the other's.
+_t_waited_for() {
+  local f="$1" m
+  [ -f "$f" ] || return 0
+  m=$(stat -f %m "$f" 2>/dev/null) || m=$(stat -c %Y "$f" 2>/dev/null) || return 0
+  case "$m" in ''|*[!0-9]*) return 0 ;; esac
+  [ -n "${_T_NOW:-}" ] || return 0
+  printf '%s' "$(( _T_NOW - m ))"
+}
 
 # _t_agent_display — _t_agent_rows with a ready-to-print label attached:
 #
-#   1 pane_id   2 session   3 cwd   4 glyph   5 status   6 label   7 task
+#   1 pane_id   2 session   3 cwd   4 glyph   5 status   6 label   7 task   8 age
 #
 # The label is the bare session name, or "session:window" once that session
 # holds more than one agent — which happens the moment you spawn a sibling with
@@ -437,22 +461,50 @@ _t_row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
 # picker. Truncated to 30 columns so a long name can't push the task column off
 # the popup.
 #
-# Shared by `ta` and the picker so both name agents identically.
+# Rows come out ordered as a WORK QUEUE, not alphabetically: waiting first (longest
+# waiting at the top), then working, then idle, alphabetical within each. A ◆
+# sitting at the bottom of five rows is the routing failure this tool exists to fix.
+#
+# Longest-waiting-first is what keeps the list honest against `prefix + j`, which
+# jumps to exactly that agent: the top row is always the one the key would take
+# you to. Two orderings that disagree would be worse than either alone.
+#
+# Sorting happens in `sort`, not awk: the awk that ships with macOS has no asort().
+# So awk emits two leading sort keys, sort orders on them, and cut drops them.
+#
+# Shared by `ta` and the picker so both name and order agents identically.
 _t_agent_display() {
   _t_agent_rows | awk -F'\t' '
-    { g[NR]=$1; st[NR]=$2; p[NR]=$3; s[NR]=$5; wn[NR]=$6; c[NR]=$7; t[NR]=$8; n[$5]++ }
+    # One place to add a state. Anything unknown sorts last rather than vanishing.
+    BEGIN { rank["waiting"] = 0; rank["working"] = 1; rank["idle"] = 2; rank["running"] = 3 }
+
+    # Compact on purpose: this column shares a line with the task.
+    function age(sec) {
+      if (sec == "") return ""
+      if (sec < 60)   return sec "s"
+      if (sec < 3600) return int(sec / 60) "m"
+      return int(sec / 3600) "h"
+    }
+
+    { g[NR]=$1; st[NR]=$2; p[NR]=$3; s[NR]=$5; wn[NR]=$6; c[NR]=$7; t[NR]=$8; a[NR]=$9; n[$5]++ }
     END {
       for (i = 1; i <= NR; i++) {
         label = (n[s[i]] > 1) ? s[i] ":" wn[i] : s[i]
         if (length(label) > 30) label = substr(label, 1, 29) "…"
-        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", p[i], s[i], c[i], g[i], st[i], label, t[i]
+        r = (st[i] in rank) ? rank[st[i]] : 9
+        printf "%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+               r, (a[i] == "" ? 0 : a[i]), tolower(label),
+               p[i], s[i], c[i], g[i], st[i], label, t[i], age(a[i])
       }
-    }'
+    }' | LC_ALL=C sort -t "$(printf '\t')" -k1,1n -k2,2nr -k3,3 | cut -f4-
 }
 
 ta() {
   local out
-  out=$(_t_agent_display | cut -f4-)
+  # "waiting 6m" rather than a separate column: it belongs with the state, and a
+  # column of its own would push the task off a narrow terminal.
+  out=$(_t_agent_display | awk -F'\t' '
+    { st = $5 ($8 != "" ? " " $8 : ""); printf "%s\t%s\t%s\t%s\n", $4, st, $6, $7 }')
 
   if [ -t 1 ]; then
     tput home 2>/dev/null

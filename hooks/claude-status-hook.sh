@@ -13,7 +13,12 @@
 # Wired into ~/.claude/settings.json — see hooks/README.md:
 #   Notification, PermissionRequest  -> set    (needs your attention)
 #   Stop, UserPromptSubmit, SessionStart -> clear
+#
+# With TMUX_AGENT_NOTIFY=1 it also fires a desktop notification on the transition
+# into waiting — see bin/tmux-agent-notify.sh. Off by default.
 set -u
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 action="${1:-clear}"
 
@@ -31,7 +36,30 @@ mkdir -p "$dir" 2>/dev/null || exit 0
 marker="$dir/${TMUX_PANE#%}.waiting"
 
 case "$action" in
-  set) : > "$marker" ;;
+  set)
+    # Was it already waiting? The marker answers that, and it's the difference
+    # between notifying on the transition and notifying on every hook event —
+    # Claude Code fires Notification more than once for a single question.
+    if [ -f "$marker" ]; then
+      already=1
+    else
+      already=0
+    fi
+    : > "$marker"
+
+    if [ "$already" = 0 ] && [ "${TMUX_AGENT_NOTIFY:-}" = 1 ]; then
+      session=$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)
+      title=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_title}' 2>/dev/null)
+      # The pane title is "<glyph> <task>"; the glyph is ours, the task is the
+      # useful half.
+      task="${title#* }"
+      # Backgrounded and silenced. This is in the agent's critical path: it must
+      # not add latency, and it must never write to the agent's output.
+      "$DIR/../bin/tmux-agent-notify.sh" \
+        "${session:-agent} needs you" "${task:-waiting for your answer}" \
+        >/dev/null 2>&1 &
+    fi
+    ;;
   *)   rm -f "$marker" ;;
 esac
 

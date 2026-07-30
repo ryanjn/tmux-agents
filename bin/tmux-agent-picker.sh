@@ -39,14 +39,47 @@ fi
 
 # Fields 1-3 (pane id, session, cwd) are what the actions target; everything
 # from field 4 on is display, which is what --with-nth=4.. shows and searches.
+#
+# The age column sits between the glyph and the name, padded even when empty, so
+# the name column stays put whether or not anything is waiting. Waiting-first
+# ordering comes from _t_agent_display and fzf preserves it for an empty query.
 _list() {
-  _t_agent_display | awk -F'\t' '{ printf "%s\t%s\t%s\t%s  %-30s %s\n", $1, $2, $3, $4, $6, $7 }'
+  _t_agent_display |
+    awk -F'\t' '{ printf "%s\t%s\t%s\t%s %-4s %-30s %s\n", $1, $2, $3, $4, $8, $6, $7 }'
 }
 
-if [ "${1:-}" = "--list" ]; then
-  _list
-  exit 0
-fi
+# ---------------------------------------------------------------------------
+# Preview: what it's saying, and what it has done to the repo
+# ---------------------------------------------------------------------------
+# The screen alone tells you what the agent is talking about. The header tells you
+# whether it has left uncommitted work behind — the thing you'd otherwise have to
+# visit every agent to find out.
+#
+# ⚠️  --no-optional-locks matters. A plain `git status` can take the index lock,
+# and these repos have live agents writing to them; this runs on every cursor
+# move. Read-only or not at all.
+_preview() {
+  local pane="${1:-}" cwd="${2:-}" branch dirty
+  if [ -n "$cwd" ] && git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1; then
+    branch=$(git -C "$cwd" --no-optional-locks rev-parse --abbrev-ref HEAD 2>/dev/null)
+    # Detached HEAD reads as the literal word "HEAD", which tells you nothing.
+    [ "$branch" = HEAD ] &&
+      branch=$(git -C "$cwd" --no-optional-locks rev-parse --short HEAD 2>/dev/null)
+    dirty=$(git -C "$cwd" --no-optional-locks status --porcelain 2>/dev/null | grep -c .)
+    if [ "${dirty:-0}" -gt 0 ]; then
+      printf '%s · %s +%s uncommitted\n\n' "${cwd##*/}" "$branch" "$dirty"
+    else
+      printf '%s · %s clean\n\n' "${cwd##*/}" "$branch"
+    fi
+  fi
+  [ -n "$pane" ] && tmux capture-pane -pe -t "$pane" 2>/dev/null | tail -n 60
+  return 0
+}
+
+case "${1:-}" in
+  --list)    _list; exit 0 ;;
+  --preview) shift; _preview "${1:-}" "${2:-}"; exit 0 ;;
+esac
 
 # One tab-separated line for tmux-agent-pick.sh to act on once this popup is out
 # of the way. Field 4 is the query, so the reopened picker lands where you left it.
@@ -74,7 +107,7 @@ out=$(
     --with-nth=4.. \
     --print-query \
     --expect=ctrl-n,ctrl-s,ctrl-x,ctrl-f \
-    --preview 'tmux capture-pane -pe -t {1} | tail -n 60' \
+    --preview "$0 --preview {1} {3}" \
     --preview-window='right,60%,border-left' \
     --header='enter jump   ctrl-n new   ctrl-s alongside   ctrl-x kill   ctrl-f files   ctrl-r refresh' \
     --prompt='agent> ' \

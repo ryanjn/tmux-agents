@@ -52,6 +52,59 @@ for fn in t tl ta ts tw tk _t_agent_rows _t_agent_display _t_new_session \
 done
 check "version is set" "[ -n \"\${TMUX_AGENTS_VERSION:-}\" ]"
 
+printf '\nrows, sort and age\n'
+# Stub _t_agent_rows in a subshell so the ordering and age formatting can be
+# checked without three agents actually waiting. Deliberately out of order and
+# alphabetically hostile: zeta idle, alpha working, mid waiting for 3700s.
+STUB='
+_t_agent_rows() {
+  printf "○\tidle\t%%1\t@1\tzeta\tclaude\t/tmp\ttask\t\n"
+  printf "●\tworking\t%%2\t@2\talpha\tclaude\t/tmp\ttask\t\n"
+  printf "◆\twaiting\t%%3\t@3\tmid\tclaude\t/tmp\ttask\t3700\n"
+  printf "◇\trunning\t%%4\t@4\tbeta\taider\t/tmp\ttask\t\n"
+}'
+check "rows carry 9 fields" \
+  "[ \"\$(_t_agent_rows | awk -F'\t' 'NR==1 { print NF }')\" = 9 ] || [ -z \"\$(_t_agent_rows)\" ]"
+check "waiting sorts first, not alphabetically" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_agent_display | head -1 | cut -f6 )\" = mid ]"
+check "then working, idle, running" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_agent_display | cut -f5 | tr '\n' ' ' )\" = 'waiting working idle running ' ]"
+check "age renders as 1h" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_agent_display | head -1 | cut -f8 )\" = 1h ]"
+check "non-waiting rows have no age" \
+  "[ -z \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_agent_display | sed -n 2p | cut -f8 )\" ]"
+check "ties sort alphabetically by label" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; _t_agent_rows() { printf '●\tworking\t%%1\t@1\tzeta\tc\t/tmp\tt\t\n●\tworking\t%%2\t@2\talpha\tc\t/tmp\tt\t\n'; }; _t_agent_display | head -1 | cut -f6 )\" = alpha ]"
+
+printf '\nnotifications\n'
+NOTIFYLOG=$(mktemp)
+printf '#!/bin/sh\nprintf "[%%s][%%s]" "$1" "$2" > %s\n' "$NOTIFYLOG" > "$NOTIFYLOG.cmd"
+chmod +x "$NOTIFYLOG.cmd"
+check "notifier uses \$TMUX_AGENT_NOTIFY_CMD when set" \
+  "TMUX_AGENT_NOTIFY_CMD='$NOTIFYLOG.cmd' '$ROOT/bin/tmux-agent-notify.sh' 'T' 'M' && [ \"\$(cat '$NOTIFYLOG')\" = '[T][M]' ]"
+check "notifier never fails when the notifier itself is missing" \
+  "TMUX_AGENT_NOTIFY_CMD=/nonexistent/nope '$ROOT/bin/tmux-agent-notify.sh' 'T' 'M'"
+
+# Behavioural, not a grep: run the hook the way Claude Code does — action, a pane
+# id, a throwaway HOME for the marker — and see whether anything gets sent.
+HOOKHOME=$(mktemp -d)
+hook_run() {   # hook_run NOTIFY_VALUE  -> prints whatever reached the notifier
+  : > "$NOTIFYLOG"
+  rm -rf "$HOOKHOME/.cache"
+  env HOME="$HOOKHOME" TMUX_PANE=%999 TMUX_AGENT_NOTIFY="$1" \
+      TMUX_AGENT_NOTIFY_CMD="$NOTIFYLOG.cmd" \
+      "$ROOT/hooks/claude-status-hook.sh" set </dev/null >/dev/null 2>&1
+  sleep 0.4          # the hook backgrounds the notifier on purpose
+  cat "$NOTIFYLOG" 2>/dev/null
+}
+check "hook sends nothing with TMUX_AGENT_NOTIFY unset" "[ -z \"\$(hook_run '')\" ]"
+check "hook sends a notification with TMUX_AGENT_NOTIFY=1" "[ -n \"\$(hook_run 1)\" ]"
+check "hook still writes the waiting marker" \
+  "hook_run 1 >/dev/null; ls '$HOOKHOME/.cache/tmux-agent-status/' | grep -q '999.waiting'"
+check "no second notification while it stays waiting" \
+  "hook_run 1 >/dev/null; : > '$NOTIFYLOG'; env HOME='$HOOKHOME' TMUX_PANE=%999 TMUX_AGENT_NOTIFY=1 TMUX_AGENT_NOTIFY_CMD='$NOTIFYLOG.cmd' '$ROOT/hooks/claude-status-hook.sh' set </dev/null >/dev/null 2>&1; sleep 0.4; [ -z \"\$(cat '$NOTIFYLOG')\" ]"
+rm -rf "$HOOKHOME" 2>/dev/null
+
 printf '\nfile browser sub-modes\n'
 check "--list of a directory is non-empty" \
   "[ -n \"\$(TMUX_FILE_DIR='$ROOT' TMUX_FILE_MODE=dir '$ROOT/bin/tmux-file-picker.sh' --list)\" ]"
@@ -59,6 +112,12 @@ check "--list is sorted, directories first" \
   "TMUX_FILE_DIR='$ROOT' TMUX_FILE_MODE=dir '$ROOT/bin/tmux-file-picker.sh' --list | head -1 | grep -q '^\.\.$'"
 check "--list recursive is non-empty" \
   "[ -n \"\$(TMUX_FILE_DIR='$ROOT' TMUX_FILE_MODE=recursive '$ROOT/bin/tmux-file-picker.sh' --list)\" ]"
+check "agent preview adds a git header for a repo" \
+  "'$ROOT/bin/tmux-agent-picker.sh' --preview '' '$ROOT' | head -1 | grep -qE 'tmux-agents · .+ (clean|\\+[0-9]+ uncommitted)'"
+check "agent preview adds nothing for a non-repo" \
+  "[ -z \"\$('$ROOT/bin/tmux-agent-picker.sh' --preview '' /tmp)\" ]"
+check "agent preview never writes to the repo (no index lock)" \
+  "grep -q 'no-optional-locks' '$ROOT/bin/tmux-agent-picker.sh'"
 check "--preview of a text file shows line numbers" \
   "TMUX_FILE_DIR='$ROOT' '$ROOT/bin/tmux-file-picker.sh' --preview README.md | grep -q '    1  '"
 check "--preview of a directory lists it" \

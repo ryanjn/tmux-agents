@@ -232,6 +232,14 @@ yourself:
 - **`prefix + f` replaces tmux's default `find-window`.** `prefix + w` covers that
   ground; comment the line out in `tmux/agents.conf.in` if you disagree.
 
+## Where this is going
+
+[ROADMAP.md](ROADMAP.md) — the plan, organised around the five taxes of running
+several agents at once: routing, reconstruction, awareness, handoff and ceremony.
+Short version of what's next: **one key that jumps to whichever agent is waiting on
+you**, waiting times in the list, and a board view that shows every agent at once
+so you stop opening the picker just to look.
+
 ## Contributing
 
 ```bash
@@ -240,6 +248,7 @@ yourself:
 ```
 
 Both run without a tmux server. Issues and PRs welcome — especially Linux
-polish and zsh completion.
+polish and zsh completion. The `1.0` section of the roadmap is mostly
+self-contained, well-defined work if you're looking for somewhere to start.
 
 MIT © Ryan Norris

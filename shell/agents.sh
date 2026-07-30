@@ -22,7 +22,7 @@
 # command, and `t` is a popular alias. Check with `type t` before sourcing, or
 # see the README for how to load only the tmux keybindings.
 
-TMUX_AGENTS_VERSION="0.2.3"
+TMUX_AGENTS_VERSION="0.2.4"
 
 command -v tmux >/dev/null 2>&1 || return 0
 
@@ -523,6 +523,122 @@ _t_agent_rows() {
 # One printf for the row layout, so adding a field means editing one line.
 _t_row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
 
+# _t_context_tokens PANE CWD — how much context that agent is currently carrying,
+# in tokens. Empty when it can't be known, which is often, and that's fine.
+#
+# Claude Code records per-turn usage in its transcript, so the last assistant turn
+# tells you the size of the prompt it just sent:
+#
+#     input_tokens + cache_creation_input_tokens + cache_read_input_tokens
+#
+# ⚠️  TOKENS, NOT A PERCENTAGE, on purpose. The transcript records the model as
+# "claude-opus-5" whether it is the 200k or the 1M variant, so the denominator is
+# genuinely unknowable from here — a percentage would be a confident guess, and
+# wrong by 5x for anyone on a 1M model. Set TMUX_AGENT_CTX_WINDOW if all your
+# agents share a window and you want percentages instead.
+#
+# ⚠️  Reads Claude Code's on-disk transcript, which is not a public interface. It
+# is therefore written to fail closed: anything unexpected yields an empty string
+# and the column simply disappears.
+_t_context_tokens() {
+  local pane="$1" cwd="$2" marker f dir n cache mtime cached_mtime cached_tokens tokens
+
+  # Exact route: the hook records which transcript belongs to which pane. Two
+  # agents sharing a folder (a `ts` sibling) can only be told apart this way.
+  marker="$HOME/.cache/tmux-agent-status/${pane#%}.transcript"
+  if [ -f "$marker" ]; then
+    f=$(cat "$marker" 2>/dev/null)
+  fi
+
+  if [ -z "${f:-}" ] || [ ! -f "$f" ]; then
+    # Fallback for agents that started before the hook learned to record it:
+    # Claude Code names the directory after the cwd, with / turned into -.
+    [ -n "$cwd" ] || return 0
+    dir="$HOME/.claude/projects/$(printf '%s' "$cwd" | tr '/' '-')"
+    [ -d "$dir" ] || return 0
+    # Newest transcript in that folder — NOT "one modified recently". An agent
+    # waiting on you for five hours hasn't written a line in five hours, and it is
+    # the one you most want this number for.
+    #
+    # Whether this folder is unambiguous is _t_context_map's problem: it is the
+    # only place that knows how many *live agents* share a cwd.
+    f=$(ls -t "$dir"/*.jsonl 2>/dev/null | head -1)
+  fi
+  [ -n "$f" ] && [ -f "$f" ] || return 0
+
+  # Cached against the transcript's mtime. These files reach tens of megabytes and
+  # this runs for every agent on every refresh; without the cache a six-agent
+  # sweep cost 326ms, which is far too much to spend on a column.
+  cache="$HOME/.cache/tmux-agent-status/${pane#%}.ctx"
+  mtime=$(stat -f %m "$f" 2>/dev/null) || mtime=$(stat -c %Y "$f" 2>/dev/null) || mtime=""
+  if [ -n "$mtime" ] && [ -f "$cache" ]; then
+    IFS=' ' read -r cached_mtime cached_tokens < "$cache" 2>/dev/null
+    if [ "$cached_mtime" = "$mtime" ] && [ -n "${cached_tokens:-}" ]; then
+      printf '%s' "$cached_tokens"
+      return 0
+    fi
+  fi
+
+  # Only the tail: these files reach tens of megabytes. Sidechain entries are
+  # subagent turns — their usage is not the main thread's context.
+  # LC_ALL=C so awk treats the input as bytes: `tail -c` cuts mid-character, and
+  # macOS awk aborts on the resulting invalid UTF-8 with a screenful of the
+  # offending line. Everything matched here is ASCII, so bytes are the right unit.
+  # stderr is closed too — this must never be able to spray into a picker.
+  tokens=$(tail -c 65536 "$f" 2>/dev/null | LC_ALL=C awk '
+    /"usage":/ && !/"isSidechain":true/ { last = $0 }
+    END {
+      if (last == "") exit
+      n = split(last, parts, "\"usage\":{")
+      u = parts[n]
+      # Bound it to that one object. Without this the scan runs on into
+      # whatever else the line holds and sums the same fields twice — which
+      # showed up as a perfectly plausible 1.4M against a 1M window.
+      b = index(u, "}")
+      if (b > 0) u = substr(u, 1, b - 1)
+      total = 0
+      while (match(u, /"(input_tokens|cache_creation_input_tokens|cache_read_input_tokens)":[0-9]+/)) {
+        f = substr(u, RSTART, RLENGTH)
+        sub(/.*:/, "", f)
+        total += f
+        u = substr(u, RSTART + RLENGTH)
+      }
+      if (total > 0) print total
+    }' 2>/dev/null)
+
+  [ -n "${tokens:-}" ] || return 0
+  [ -n "$mtime" ] && printf '%s %s\n' "$mtime" "$tokens" > "$cache" 2>/dev/null
+  printf '%s' "$tokens"
+}
+
+# _t_context_map — "PANE:TOKENS …" for every agent we can attribute confidently.
+# Reads rows on stdin so the caller's single _t_agent_rows sweep is reused.
+#
+# ⚠️  The guard is the whole point. Two agents in the same folder (a `ts` sibling,
+# or several agents started from ~/agent-projects) resolve to the same transcript
+# directory, and the newest file there belongs to whichever wrote last. Left
+# unguarded that reported one agent's context against another's name — two agents
+# both showing 487408, which looks entirely plausible and is simply false.
+#
+# So: a pane with a hook-recorded transcript is always trusted, and otherwise the
+# agent must be the only live one in its folder.
+_t_context_map() {
+  local rows dups g st pane win s wn cwd rest tok out=""
+  rows=$(cat)
+  [ -n "$rows" ] || return 0
+  # The shared folders, computed once rather than re-counted per agent.
+  dups=$'\n'$(printf '%s\n' "$rows" | awk -F'\t' '{ c[$7]++ } END { for (k in c) if (c[k] > 1) print k }')$'\n'
+  while IFS=$'\t' read -r g st pane win s wn cwd rest; do
+    [ -n "${pane:-}" ] || continue
+    if [ ! -f "$HOME/.cache/tmux-agent-status/${pane#%}.transcript" ]; then
+      case "$dups" in *$'\n'"$cwd"$'\n'*) continue ;; esac
+    fi
+    tok=$(_t_context_tokens "$pane" "$cwd")
+    [ -n "$tok" ] && out="$out$pane:$tok "
+  done <<< "$rows"
+  printf '%s' "$out"
+}
+
 # _t_proc_counts — "PID:N PID:N …": how many processes each pane has underneath it.
 #
 # An agent that has fanned out is invisible today. The preview says "Running 1
@@ -574,6 +690,8 @@ _t_waited_for() {
 #
 #   1 pane_id   2 session   3 cwd   4 glyph   5 status   6 label   7 task   8 age
 #   9 process count, but only when it's high enough to be worth saying
+#   10 context carried, in tokens ("730k") — or a percentage if you set
+#      TMUX_AGENT_CTX_WINDOW, and empty when it can't be attributed confidently
 #
 # Field 8 is "how long has it been like this": time waiting for an agent that's
 # waiting on you, time since it last printed anything otherwise. Both answer the
@@ -599,9 +717,14 @@ _t_waited_for() {
 #
 # Shared by `ta` and the picker so both name and order agents identically.
 _t_agent_display() {
-  local procs
+  local rows procs ctx
+  # One sweep, shared by all three enrichments.
+  rows=$(_t_agent_rows)
+  [ -n "$rows" ] || return 0
   procs=$(_t_proc_counts)
-  _t_agent_rows | awk -F'\t' -v procs="$procs" -v busy="${TMUX_AGENT_BUSY_PROCS:-8}" '
+  ctx=$(printf '%s\n' "$rows" | _t_context_map)
+  printf '%s\n' "$rows" | awk -F'\t' -v procs="$procs" -v ctx="$ctx" \
+      -v busy="${TMUX_AGENT_BUSY_PROCS:-8}" -v window="${TMUX_AGENT_CTX_WINDOW:-0}" '
     # One place to add a state. Anything unknown sorts last rather than vanishing.
     BEGIN {
       rank["waiting"] = 0; rank["working"] = 1; rank["idle"] = 2; rank["running"] = 3
@@ -609,6 +732,17 @@ _t_agent_display() {
       # let you use a name as both a scalar and an array.
       k = split(procs, P, " ")
       for (i = 1; i <= k; i++) if (split(P[i], kv, ":") == 2) pcount[kv[1]] = kv[2]
+      k = split(ctx, C, " ")
+      for (i = 1; i <= k; i++) if (split(C[i], kv, ":") == 2) ctok[kv[1]] = kv[2]
+    }
+
+    # Tokens by default, because the denominator is not knowable — see
+    # _t_context_tokens. A percentage only when you have told us the window.
+    function ctxcol(tok) {
+      if (tok == "") return ""
+      if (window + 0 > 0) return int(tok * 100 / window) "%"
+      if (tok >= 1000) return int(tok / 1000) "k"
+      return tok
     }
 
     # Compact on purpose: this column shares a line with the task.
@@ -632,9 +766,10 @@ _t_agent_display() {
         # children, a fan-out runs dozens.
         np = (pp[i] in pcount) ? pcount[pp[i]] : 0
         procs_col = (np + 0 >= busy + 0) ? "⚙" np : ""
-        printf "%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+        printf "%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
                r, (a[i] == "" ? 0 : a[i]), tolower(label),
-               p[i], s[i], c[i], g[i], st[i], label, t[i], age(shown), procs_col
+               p[i], s[i], c[i], g[i], st[i], label, t[i], age(shown), procs_col,
+               ctxcol(p[i] in ctok ? ctok[p[i]] : "")
       }
     }' | LC_ALL=C sort -t "$(printf '\t')" -k1,1n -k2,2nr -k3,3 | cut -f4-
 }
@@ -643,8 +778,11 @@ ta() {
   local out
   # "waiting 6m" rather than a separate column: it belongs with the state, and a
   # column of its own would push the task off a narrow terminal.
+  # Everything about "what state is this in" folded into one column. A column of
+  # its own would be empty for any agent we can't attribute, and `column -t`
+  # collapses empty fields — which slides every later column left on that row.
   out=$(_t_agent_display | awk -F'\t' '
-    { st = $5 ($8 != "" ? " " $8 : "") ($9 != "" ? " " $9 : "")
+    { st = $5 ($8 != "" ? " " $8 : "") ($9 != "" ? " " $9 : "") ($10 != "" ? " " $10 : "")
       printf "%s\t%s\t%s\t%s\n", $4, st, $6, $7 }')
 
   if [ -t 1 ]; then

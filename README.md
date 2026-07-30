@@ -114,6 +114,14 @@ Every agent, with a live preview of its screen:
 | `ctrl-f` | **Browse its files** |
 | `ctrl-r` | Refresh |
 
+Each row also shows **how much context that agent is carrying** (`736k`), read
+from Claude Code's transcript — so "which agent is about to compact?" and "which
+one can take more work?" are answerable from the list. Tokens rather than a
+percentage on purpose: the transcript records the model as `claude-opus-5`
+whether it's the 200k or the 1M variant, so a percentage would be a confident
+guess and wrong by 5x for anyone on 1M. Set `TMUX_AGENT_CTX_WINDOW` if your
+agents share a window and you'd rather see `73%`.
+
 Each row carries **how long it has been like that** — time waiting for an agent
 that wants you, time since it last printed anything otherwise. `working 40m` is a
 wedged agent; the spinner alone can't tell you that. Rows also show `⚙N` when an
@@ -161,11 +169,11 @@ From the picker, `ctrl-f` browses **the highlighted agent's** folder — so
 
 ```
 $ ta
-◆  waiting 32m      api-gateway      Should I drop the legacy column?
-◆  waiting 4m       payments-api     Which currency should the fallback use?
-●  working 2s ⚙41   vault-tagger     Tagging every item in the vault
-●  working 40m      billing-worker   Adding retry backoff
-○  idle 3h          docs-site        Rewrote the install guide
+◆  waiting 32m 189k      api-gateway      Should I drop the legacy column?
+◆  waiting 4m 22k        payments-api     Which currency should the fallback use?
+●  working 2s ⚙41 88k    vault-tagger     Tagging every item in the vault
+●  working 40m 512k      billing-worker   Adding retry backoff
+○  idle 3h 61k           docs-site        Rewrote the install guide
 ```
 
 `t` and `tk` complete from live sessions plus every folder on
@@ -209,6 +217,7 @@ Set these before the helpers are sourced (i.e. above the marker block in your rc
 | `TMUX_AGENT_NOTIFY` | *(off)* | `1` sends a desktop notification the moment an agent starts waiting. Prefer `tmux set -g @agent-notify 1`, which applies to agents already running |
 | `TMUX_AGENT_NOTIFY_CMD` | *(auto)* | Your own notifier, called as `CMD TITLE MESSAGE`. Otherwise terminal-notifier, osascript, or notify-send |
 | `TMUX_AGENT_BUSY_PROCS` | `8` | How many processes an agent must have spawned before it's flagged `⚙N` |
+| `TMUX_AGENT_CTX_WINDOW` | *(off)* | Your context window in tokens. Set it and context shows as `73%` instead of `736k` |
 
 Running more than one kind of agent? Wrap `t` — bash's dynamic scoping means the
 override applies and then disappears, and the window gets named after the tool:

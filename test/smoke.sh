@@ -85,6 +85,32 @@ check "an idle agent shows how long since it last spoke" \
 check "waiting time still wins over silence for a waiting agent" \
   "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_proc_counts() { :; }; _t_agent_display | head -1 | cut -f8 )\" = 1h ]"
 
+printf '\ncontext usage\n'
+CTXHOME=$(mktemp -d); mkdir -p "$CTXHOME/.cache/tmux-agent-status"
+# A transcript shaped like Claude Code's: the last non-sidechain assistant turn is
+# what counts, and a sidechain turn after it must not win.
+CTXFILE="$CTXHOME/t.jsonl"
+printf '%s\n' '{"type":"assistant","usage":{"input_tokens":5,"cache_creation_input_tokens":100,"cache_read_input_tokens":1000,"output_tokens":9}}' > "$CTXFILE"
+printf '%s\n' '{"type":"assistant","usage":{"input_tokens":2,"cache_creation_input_tokens":300,"cache_read_input_tokens":50000,"output_tokens":40,"server_tool_use":{"web_search_requests":0}}}' >> "$CTXFILE"
+printf '%s\n' '{"type":"assistant","isSidechain":true,"usage":{"input_tokens":1,"cache_creation_input_tokens":1,"cache_read_input_tokens":999999,"output_tokens":1}}' >> "$CTXFILE"
+printf '%s\n' "$CTXFILE" > "$CTXHOME/.cache/tmux-agent-status/900.transcript"
+
+check "sums input + cache_creation + cache_read of the last real turn" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; HOME='$CTXHOME' _t_context_tokens %900 /nowhere )\" = 50302 ]"
+check "a subagent's turn does not count as the main thread's context" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; HOME='$CTXHOME' _t_context_tokens %900 /nowhere )\" != 1000002 ]"
+check "no transcript, no guess" \
+  "[ -z \"\$( . '$ROOT/shell/agents.sh'; HOME='$CTXHOME' _t_context_tokens %901 /nowhere )\" ]"
+check "the second read is served from cache" \
+  ". '$ROOT/shell/agents.sh'; HOME='$CTXHOME' _t_context_tokens %900 /nowhere >/dev/null; [ -f '$CTXHOME/.cache/tmux-agent-status/900.ctx' ]"
+check "two agents sharing a folder get no context rather than each other's" \
+  "[ -z \"\$( . '$ROOT/shell/agents.sh'; HOME='$CTXHOME' _t_context_map <<< \"\$(printf '●\tworking\t%%1\t@1\ta\tc\t/shared\tt\t\t1\t11\n●\tworking\t%%2\t@2\tb\tc\t/shared\tt\t\t1\t12\n')\" )\" ]"
+check "tokens, not a fabricated percentage, by default" \
+  "grep -q 'TOKENS, NOT A PERCENTAGE' '$ROOT/shell/agents.sh'"
+check "hook records the transcript path for exact attribution" \
+  "grep -q 'transcript_path' '$ROOT/hooks/claude-status-hook.sh'"
+rm -rf "$CTXHOME"
+
 printf '\nprocess fan-out\n'
 check "a busy agent is flagged with its process count" \
   "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_proc_counts() { printf '102:37 '; }; _t_agent_display | sed -n 2p | cut -f9 )\" = '⚙37' ]"

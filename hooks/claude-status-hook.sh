@@ -32,8 +32,9 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 action="${1:-clear}"
 
-# Drain stdin — Claude Code pipes hook JSON in and we don't want it blocking.
-cat >/dev/null 2>&1 || true
+# Claude Code pipes hook JSON in; read it rather than discarding it, both so it
+# never blocks and because it names this session's transcript.
+payload=$(cat 2>/dev/null || true)
 
 # The hook is a child of the Claude process, which runs in the pane, so
 # TMUX_PANE is inherited. Outside tmux there's nothing to track.
@@ -44,6 +45,18 @@ mkdir -p "$dir" 2>/dev/null || exit 0
 
 # TMUX_PANE looks like "%12"; strip the % so the filename stays boring.
 marker="$dir/${TMUX_PANE#%}.waiting"
+
+# Record which transcript belongs to this pane. Without it, context usage has to
+# be guessed from the working directory — and two agents in one folder (a `ts`
+# sibling) are indistinguishable that way, which means reporting one agent's
+# context under another agent's name. Cheap, and exact.
+#
+# No jq dependency: the field is a plain string, and this runs in an agent's hook
+# path, so it stays with shell builtins and sed.
+transcript=$(printf '%s' "$payload" | sed -n 's/.*"transcript_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+if [ -n "$transcript" ]; then
+  printf '%s\n' "$transcript" > "$dir/${TMUX_PANE#%}.transcript" 2>/dev/null || true
+fi
 
 case "$action" in
   set)

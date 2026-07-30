@@ -25,15 +25,27 @@
 # wrong terminal window" — see tmux-agent-pick.sh.
 set -u
 
-# Inside a popup tmux leaves $TMUX_PANE empty while $TMUX is still set — the same
-# quirk that breaks switch-client in there. That's our "am I in a popup" test.
-if [ -n "${TMUX:-}" ] && [ -z "${TMUX_PANE:-}" ] && [ "${1:-}" != "--render-confirm" ] &&
-   [ "${1:-}" != "--render-input" ]; then
-  tmux display-message "tmux-dialog: refusing to open a popup inside a popup"
-  # 2, never 1 and never 0: a caller doing `dialog confirm … || exit` must not
-  # read this as an answer of any kind.
-  exit 2
-fi
+# $TMUX_AGENT_IN_POPUP is set (via display-popup -e) by whoever opens a popup, so
+# anything running inside one knows it.
+#
+# ⚠️  Do NOT try to infer this from the environment. The obvious test — "$TMUX set
+# but $TMUX_PANE empty" — is also true under `tmux run-shell`, which is exactly
+# where the dialogs legitimately run, so it refused every real dialog and the
+# picker just flashed. Worse, it looked fine under test: a tmux server started
+# from inside a pane inherits that pane's $TMUX_PANE into its own environment and
+# hands it to run-shell children, so the guard passed on the test server and
+# failed on a real one. An explicit marker can't drift like that.
+case "${1:-}" in
+  --render-confirm|--render-input) ;;   # already inside the popup; that's the job
+  *)
+    if [ "${TMUX_AGENT_IN_POPUP:-}" = 1 ]; then
+      tmux display-message "tmux-dialog: can't open a dialog inside a popup — see tmux-agent-pick.sh"
+      # 2, never 1 and never 0: a caller doing `dialog confirm … || exit` must not
+      # read this as an answer of any kind.
+      exit 2
+    fi
+    ;;
+esac
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 

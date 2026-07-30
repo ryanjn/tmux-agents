@@ -72,6 +72,7 @@ while :; do
     -e "TMUX_AGENT_CLIENT=$CLIENT" \
     -e "TMUX_AGENT_REQUEST=$REQUEST" \
     -e "TMUX_AGENT_QUERY=$QUERY" \
+    -e "TMUX_AGENT_IN_POPUP=1" \
     -E -w 90% -h 80% "$DIR/tmux-agent-picker.sh"
 
   verb=""; arg1=""; arg2=""

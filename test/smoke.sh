@@ -66,6 +66,16 @@ check "--preview of a directory lists it" \
 check "--preview of a missing file says so" \
   "TMUX_FILE_DIR='$ROOT' '$ROOT/bin/tmux-file-picker.sh' --preview no-such-file | grep -q 'gone'"
 
+printf '\ndialog guard\n'
+# The guard must key off the explicit marker, NOT off an empty $TMUX_PANE: that is
+# also how `tmux run-shell` looks, which is where the dialogs actually run.
+check "refuses inside a popup (marker set)" \
+  "TMUX_AGENT_IN_POPUP=1 '$ROOT/bin/tmux-dialog.sh' confirm ' t ' 'q'; [ \$? = 2 ]"
+check "does NOT refuse merely because TMUX_PANE is empty" \
+  "! ( TMUX=fake TMUX_PANE= '$ROOT/bin/tmux-dialog.sh' confirm ' t ' 'q'; [ \$? = 2 ] )"
+check "every popup we open sets the marker" \
+  "[ \$(grep -c 'TMUX_AGENT_IN_POPUP=1' '$ROOT'/bin/tmux-agent-pick.sh '$ROOT'/bin/tmux-file-pick.sh | awk -F: '{s+=\$2} END {print s}') -ge 2 ]"
+
 printf '\ninstaller\n'
 TMPHOME=$(mktemp -d)
 trap 'rm -rf "$TMPHOME"' EXIT

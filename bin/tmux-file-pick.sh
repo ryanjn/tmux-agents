@@ -28,6 +28,7 @@ ROOT=$(tmux display-message -p -t "$PANE" '#{pane_current_path}' 2>/dev/null)
 [ -n "$ROOT" ] || ROOT="$HOME"
 
 tmux display-popup -c "$CLIENT" \
+  -e "TMUX_AGENT_IN_POPUP=1" \
   -e "TMUX_FILE_ROOT=$ROOT" \
   -e "TMUX_FILE_PANE=$PANE" \
   -e "TMUX_AGENT_CLIENT=$CLIENT" \

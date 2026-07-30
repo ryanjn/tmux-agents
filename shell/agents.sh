@@ -22,7 +22,7 @@
 # command, and `t` is a popular alias. Check with `type t` before sourcing, or
 # see the README for how to load only the tmux keybindings.
 
-TMUX_AGENTS_VERSION="0.2.1"
+TMUX_AGENTS_VERSION="0.2.2"
 
 command -v tmux >/dev/null 2>&1 || return 0
 

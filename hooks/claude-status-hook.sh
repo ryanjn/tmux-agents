@@ -14,8 +14,18 @@
 #   Notification, PermissionRequest  -> set    (needs your attention)
 #   Stop, UserPromptSubmit, SessionStart -> clear
 #
-# With TMUX_AGENT_NOTIFY=1 it also fires a desktop notification on the transition
-# into waiting — see bin/tmux-agent-notify.sh. Off by default.
+# It can also fire a desktop notification on the transition into waiting — see
+# bin/tmux-agent-notify.sh. Off by default, and switched on either way:
+#
+#   tmux set -g @agent-notify 1     takes effect immediately, for agents that are
+#                                   ALREADY RUNNING, and can be toggled any time
+#   export TMUX_AGENT_NOTIFY=1      only reaches agents started afterwards, since
+#                                   a hook inherits its environment from the agent
+#                                   process, which inherits it from your shell
+#
+# The env var wins when it is set at all, including TMUX_AGENT_NOTIFY=0 to force
+# it off for one agent. The tmux option is the one you actually want day to day:
+# nothing has to restart.
 set -u
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,7 +57,14 @@ case "$action" in
     fi
     : > "$marker"
 
-    if [ "$already" = 0 ] && [ "${TMUX_AGENT_NOTIFY:-}" = 1 ]; then
+    # Resolve the switch at fire time, not at agent start, so toggling the tmux
+    # option affects agents that are already running.
+    notify="${TMUX_AGENT_NOTIFY:-}"
+    if [ -z "$notify" ]; then
+      notify=$(tmux show-option -gqv @agent-notify 2>/dev/null)
+    fi
+
+    if [ "$already" = 0 ] && [ "${notify:-0}" = 1 ]; then
       session=$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)
       title=$(tmux display-message -p -t "$TMUX_PANE" '#{pane_title}' 2>/dev/null)
       # The pane title is "<glyph> <task>"; the glyph is ours, the task is the

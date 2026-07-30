@@ -176,20 +176,26 @@ else
   printf '      %ssee %s/hooks/README.md%s\n' "$DIM" "$HOME_DIR" "$Z"
 fi
 
-if [ "${TMUX_AGENT_NOTIFY:-}" = 1 ]; then
+notify_on="${TMUX_AGENT_NOTIFY:-}"
+notify_how="\$TMUX_AGENT_NOTIFY"
+if [ -z "$notify_on" ]; then
+  notify_on=$(tmux show-option -gqv @agent-notify 2>/dev/null)
+  notify_how="@agent-notify"
+fi
+if [ "${notify_on:-0}" = 1 ]; then
   if [ -n "${TMUX_AGENT_NOTIFY_CMD:-}" ]; then
-    ok "desktop notifications on, via \$TMUX_AGENT_NOTIFY_CMD"
+    ok "desktop notifications on ($notify_how), via \$TMUX_AGENT_NOTIFY_CMD"
   elif command -v terminal-notifier >/dev/null 2>&1; then
-    ok "desktop notifications on (terminal-notifier)"
+    ok "desktop notifications on ($notify_how, terminal-notifier)"
   elif [ "$(uname -s 2>/dev/null)" = Darwin ]; then
-    ok "desktop notifications on (osascript)"
+    ok "desktop notifications on ($notify_how, osascript)"
   elif command -v notify-send >/dev/null 2>&1; then
-    ok "desktop notifications on (notify-send)"
+    ok "desktop notifications on ($notify_how, notify-send)"
   else
-    warn "TMUX_AGENT_NOTIFY=1 but no notifier found — nothing will be sent"
+    warn "notifications are on but no notifier was found — nothing will be sent"
   fi
 else
-  warn "desktop notifications off (export TMUX_AGENT_NOTIFY=1 to enable)"
+  warn "desktop notifications off — turn on with: tmux set -g @agent-notify 1"
 fi
 
 # ---------------------------------------------------------------------------

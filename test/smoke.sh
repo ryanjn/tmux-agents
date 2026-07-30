@@ -120,8 +120,12 @@ hook_run() {   # hook_run NOTIFY_VALUE  -> prints whatever reached the notifier
   sleep 0.4          # the hook backgrounds the notifier on purpose
   cat "$NOTIFYLOG" 2>/dev/null
 }
-check "hook sends nothing with TMUX_AGENT_NOTIFY unset" "[ -z \"\$(hook_run '')\" ]"
-check "hook sends a notification with TMUX_AGENT_NOTIFY=1" "[ -n \"\$(hook_run 1)\" ]"
+check "hook sends nothing when notifications are off" "[ -z \"\$(hook_run 0)\" ]"
+check "hook sends a notification when they are on" "[ -n \"\$(hook_run 1)\" ]"
+check "TMUX_AGENT_NOTIFY=0 overrides the tmux option" \
+  "grep -q 'TMUX_AGENT_NOTIFY:-' '$ROOT/hooks/claude-status-hook.sh'"
+check "the switch is read at fire time, so a live toggle reaches running agents" \
+  "grep -q 'show-option -gqv @agent-notify' '$ROOT/hooks/claude-status-hook.sh'"
 check "hook still writes the waiting marker" \
   "hook_run 1 >/dev/null; ls '$HOOKHOME/.cache/tmux-agent-status/' | grep -q '999.waiting'"
 check "no second notification while it stays waiting" \

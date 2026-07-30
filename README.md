@@ -189,7 +189,7 @@ Set these before the helpers are sourced (i.e. above the marker block in your rc
 | `T_AUTOSTART` | `claude` | What a new session runs in window 1. Empty for a plain shell |
 | `TMUX_SESSION_PATH` | `$HOME/agent-projects:$HOME/Projects` | Where session folders are looked for, and created (first entry) |
 | `TMUX_AGENT_EXTRA_PROCS` | *(none)* | Agent CLIs to detect by process name, e.g. `"aider codex"` |
-| `TMUX_AGENT_NOTIFY` | *(off)* | `1` sends a desktop notification the moment an agent starts waiting on you |
+| `TMUX_AGENT_NOTIFY` | *(off)* | `1` sends a desktop notification the moment an agent starts waiting. Prefer `tmux set -g @agent-notify 1`, which applies to agents already running |
 | `TMUX_AGENT_NOTIFY_CMD` | *(auto)* | Your own notifier, called as `CMD TITLE MESSAGE`. Otherwise terminal-notifier, osascript, or notify-send |
 | `TMUX_AGENT_BUSY_PROCS` | `8` | How many processes an agent must have spawned before it's flagged `⚙N` |
 

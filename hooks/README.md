@@ -75,6 +75,38 @@ The installer deliberately doesn't do this edit for you: `settings.json` is your
 it's JSON (so a bad merge is a broken config, not a warning), and you may already
 have hooks on these events.
 
+## Desktop notifications
+
+Once the hook is wired up, it can also post a desktop notification the moment an
+agent starts waiting — so you can leave tmux entirely and still be pulled back at
+the right time.
+
+```bash
+tmux set -g @agent-notify 1      # on, immediately, for agents already running
+tmux set -g @agent-notify 0      # off, just as immediately
+```
+
+Put the same line in your `tmux.conf` to keep it across server restarts.
+
+The switch is read **when the notification would fire**, not when the agent
+starts, which is why toggling it reaches agents that are already running. There is
+also `export TMUX_AGENT_NOTIFY=1`, but an environment variable only reaches agents
+started *afterwards* — a hook inherits its environment from the agent process. The
+env var wins when set, so `TMUX_AGENT_NOTIFY=0` silences one agent regardless of
+the global option.
+
+It fires **once per transition** into waiting, not once per hook event — Claude
+Code fires `Notification` more than once for a single question.
+
+macOS uses `terminal-notifier` when installed (nicer: repeat notifications for the
+same agent replace each other instead of stacking), otherwise `osascript`. Linux
+uses `notify-send`. Set `TMUX_AGENT_NOTIFY_CMD` to use something else entirely;
+it's called as `CMD TITLE MESSAGE`.
+
+⚠️ If nothing appears on macOS, check **System Settings → Notifications** for the
+app doing the posting — `osascript` posts as *Script Editor*, and terminal-notifier
+as itself. Both can be muted there without any error surfacing.
+
 ## Other agent CLIs
 
 If your agent doesn't set a pane title at all, you have two options.

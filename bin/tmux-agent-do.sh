@@ -10,6 +10,7 @@
 #   tmux-agent-do.sh new          NAME          new agent session named NAME
 #   tmux-agent-do.sh alongside    PANE [NAME]   new agent in PANE's session and cwd
 #   tmux-agent-do.sh kill         PANE          kill that agent, and nothing else
+#   tmux-agent-do.sh rename       PANE NEW      rename the agent's session
 #
 # The confirmation dialog for a kill lives in tmux-agent-pick.sh, not here: it has
 # to be opened from outside the picker's popup (tmux allows one overlay per
@@ -85,6 +86,21 @@ case "$cmd" in
       || die "new agent: could not create '$name'"
     _t_focus "$pane" || true
     tmux display-message "started agent '$name'"
+    ;;
+
+  rename)
+    pane="${1:-}"
+    new=$(sanitize "${2:-}")
+    [ -n "$pane" ] || die "rename: no pane given"
+    [ -n "$new" ] || exit 0
+
+    session=$(tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null)
+    [ -n "${session:-}" ] || die "rename: $pane is gone"
+    [ "$session" = "$new" ] && exit 0
+
+    _t_rename_session "$session" "$new" 2>/dev/null \
+      || die "rename: could not rename '$session' to '$new' (name taken?)"
+    tmux display-message "renamed '$session' to '$new'"
     ;;
 
   alongside)

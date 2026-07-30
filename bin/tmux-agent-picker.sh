@@ -10,6 +10,7 @@
 #            or from a dialog if you've typed nothing
 #   ctrl-s   start a second agent alongside the highlighted one, same folder
 #   ctrl-x   kill the highlighted agent, after a confirmation dialog
+#   ctrl-t   rename the highlighted agent
 #   ctrl-f   browse the highlighted agent's files
 #   ctrl-r   refresh the list and previews
 #   esc      cancel
@@ -107,10 +108,10 @@ out=$(
     --delimiter=$'\t' \
     --with-nth=4.. \
     --print-query \
-    --expect=ctrl-n,ctrl-s,ctrl-x,ctrl-f \
+    --expect=ctrl-n,ctrl-s,ctrl-x,ctrl-t,ctrl-f \
     --preview "$0 --preview {1} {3}" \
     --preview-window='right,60%,border-left' \
-    --header='enter jump   ctrl-n new   ctrl-s alongside   ctrl-x kill   ctrl-f files   ctrl-r refresh' \
+    --header='enter jump   ctrl-n new   ctrl-s clone   ctrl-t rename   ctrl-x kill   ctrl-f files   ctrl-r refresh' \
     --prompt='agent> ' \
     --query "${TMUX_AGENT_QUERY:-}" \
     --reverse --cycle --height=100% \
@@ -143,6 +144,15 @@ case "$key" in
     # holds two agents, and that's what the question needs to name.
     label=$(_t_agent_display | awk -F'\t' -v p="$pane" '$1 == p { print $6; exit }')
     _request kill "$pane" "$label" "$query"
+    exit 0
+    ;;
+
+  ctrl-t)
+    [ -n "$pane" ] || exit 0
+    # The session name is what every label, the jump queue and the status line
+    # show, so a session that has outgrown its name is genuinely hard to find.
+    label=$(_t_agent_display | awk -F'\t' -v p="$pane" '$1 == p { print $2; exit }')
+    _request rename "$pane" "$label" "$query"
     exit 0
     ;;
 

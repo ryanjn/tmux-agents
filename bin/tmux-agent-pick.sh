@@ -54,7 +54,8 @@ fi
 #
 # The picker writes one tab-separated line into $TMUX_AGENT_REQUEST:
 #
-#     kill <pane> <label> <query>     ask, then kill
+#     kill   <pane> <label> <query>   ask, then kill
+#     rename <pane> <name>  <query>   ask for a new name, then rename
 #     new  <query> - <query>          name it, asking only if the query was empty
 #
 # An empty file means "nothing to do" — Esc, or an action the picker finished by
@@ -90,6 +91,17 @@ while :; do
       fi
       # Either way, back to the list: clearing out four finished agents should be
       # four answers, not four trips through the prefix key.
+      ;;
+
+    rename)
+      [ -n "$arg1" ] || continue
+      answer=$(mktemp) || break
+      # Prefilled with the current name, so enter on its own is a no-op rather
+      # than a mistake.
+      "$DIALOG" input " rename agent " "New name for ${arg2:-this agent}" "$answer" "$arg2"
+      newname=$(cat "$answer" 2>/dev/null)
+      rm -f "$answer"
+      [ -n "$newname" ] && "$DO" rename "$arg1" "$newname"
       ;;
 
     new)

@@ -109,6 +109,7 @@ Every agent, with a live preview of its screen:
 | *(list order)* | **Waiting first, longest-waiting at the top**, then working, then idle — a work queue, not an alphabet. The top row is always where `prefix + j` would take you |
 | `ctrl-n` | **New agent**, named from whatever you've typed in the prompt |
 | `ctrl-s` | **Second agent beside** the highlighted one, in the same folder |
+| `ctrl-t` | **Rename** it — the dialog is prefilled, so enter on its own changes nothing |
 | `ctrl-x` | **Kill** it — asks in a small dialog naming the agent, then returns to the list so you can clear several |
 | `ctrl-f` | **Browse its files** |
 | `ctrl-r` | Refresh |
@@ -152,6 +153,7 @@ From the picker, `ctrl-f` browses **the highlighted agent's** folder — so
 | `t [NAME]` | Attach to `NAME`, creating session and folder if needed. Bare `t` returns to the last one |
 | `ta` | Every agent and what it's doing |
 | `ts [NAME]` | A second agent beside this one, in the same folder |
+| `tmv NEW` | Rename this agent. The session name is the label everywhere, so an agent that outgrew its name is one you can't find |
 | `tl` | Sessions — `●` attached, `·` detached |
 | `tw` | Every pane everywhere, and what's running in it |
 | `tk NAME` | Kill a session |
@@ -168,6 +170,21 @@ $ ta
 
 `t` and `tk` complete from live sessions plus every folder on
 `$TMUX_SESSION_PATH`, so tab-completion covers reattaching after a reboot.
+
+### Renaming
+
+`tmv pricing-api`, or `ctrl-t` in the picker. The session name is what the picker,
+`ta`, the status line and the jump queue all show, so a session that started life
+as `scratch` and became something real is genuinely hard to find.
+
+The **folder is deliberately left where it is**. Moving it out from under a
+running agent would leave its cwd pointing at an inode with a different name —
+every absolute path it has already written down (its own notes, a scratch dir, a
+git remote) would rot, with no way for it to notice. A stale folder name is a much
+smaller problem than a silently wrong one. The folder's `CLAUDE.md` is updated to
+say what happened, so the provenance stays honest.
+
+`tmv`, not `tr` — `tr(1)` is a command people actually use.
 
 ### New folders explain themselves
 

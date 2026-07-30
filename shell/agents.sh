@@ -22,7 +22,7 @@
 # command, and `t` is a popular alias. Check with `type t` before sourcing, or
 # see the README for how to load only the tmux keybindings.
 
-TMUX_AGENTS_VERSION="0.2.2"
+TMUX_AGENTS_VERSION="0.2.3"
 
 command -v tmux >/dev/null 2>&1 || return 0
 
@@ -319,6 +319,78 @@ _t_client_session() {
 #
 # The window gets named after the command, so `ta2 x` gives you a window called
 # "aider" rather than "claude".
+
+# ---------------------------------------------------------------------------
+# tmv NEW — rename this agent
+# ---------------------------------------------------------------------------
+# The session name is the label everywhere: the picker, `ta`, the status line, the
+# jump queue. An agent that started as `scratch` and turned into something real is
+# a thing you can no longer find, so renaming is a legibility fix, not a nicety.
+#
+# `tmv` and not `tr`: tr(1) is a command people actually use, and shadowing it
+# would be rude. See the collision warning at the top of this file.
+tmv() {
+  if [ -z "${TMUX:-}" ]; then
+    echo "tmv: run this from inside the session you want to rename" >&2
+    return 2
+  fi
+  if [ -z "${1:-}" ]; then
+    echo "usage: tmv NEW-NAME" >&2
+    return 2
+  fi
+  _t_rename_session "$(tmux display-message -p '#{session_name}')" "$1"
+}
+
+# _t_rename_session OLD NEW — rename, and keep the folder's provenance honest.
+#
+# The FOLDER is deliberately left alone. Moving it out from under a running agent
+# would leave its cwd pointing at an inode with a different name — every absolute
+# path it has already written down (in its own notes, a scratch dir, a git remote)
+# would rot, and it would have no way to notice. A stale folder name is a much
+# smaller problem than a silently wrong one.
+_t_rename_session() {
+  local old="$1" new="$2" dir
+
+  case "$new" in
+    "")   echo "rename: new name can't be empty" >&2; return 2 ;;
+    */*)  echo "rename: name can't contain '/'" >&2; return 2 ;;
+    -*)   echo "rename: name can't start with '-'" >&2; return 2 ;;
+  esac
+  [ "$old" = "$new" ] && return 0
+
+  if tmux has-session -t "=$new" 2>/dev/null; then
+    echo "rename: '$new' is already a session" >&2
+    return 1
+  fi
+
+  dir=$(tmux list-panes -s -t "=$old" -F '#{pane_current_path}' 2>/dev/null | head -1)
+  tmux rename-session -t "=$old" "$new" || return 1
+
+  # Only touch a CLAUDE.md we recognise as ours, and only the identity lines. An
+  # agent may have rewritten the rest of that file, and it owns it.
+  if [ -n "$dir" ] && [ -f "$dir/CLAUDE.md" ] && grep -q '^# Agent session: ' "$dir/CLAUDE.md" 2>/dev/null; then
+    # %% as the delimiter, not | — that table row is full of pipes. Session
+    # names are sanitised to [A-Za-z0-9._-], so %% can never appear in one.
+    # The comments go ABOVE: a comment between backslash-continued lines
+    # silently cuts the command in half.
+    _t_sed_inplace "$dir/CLAUDE.md" \
+      -e "s%^# Agent session: .*%# Agent session: $new%" \
+      -e "s%^| Session | \`$old\` |%| Session | \`$new\` |%"
+    printf '\n_Renamed from `%s` to `%s` on %s._\n' \
+      "$old" "$new" "$(date '+%Y-%m-%d %H:%M')" >> "$dir/CLAUDE.md"
+  fi
+}
+
+# sed -i takes an argument on BSD and refuses one on GNU. One wrapper beats
+# remembering which machine you are on.
+_t_sed_inplace() {
+  local f="$1"; shift
+  if sed --version >/dev/null 2>&1; then
+    sed -i "$@" "$f"
+  else
+    sed -i '' "$@" "$f"
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # tl — list sessions

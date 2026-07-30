@@ -132,6 +132,28 @@ check "no second notification while it stays waiting" \
   "hook_run 1 >/dev/null; : > '$NOTIFYLOG'; env HOME='$HOOKHOME' TMUX_PANE=%999 TMUX_AGENT_NOTIFY=1 TMUX_AGENT_NOTIFY_CMD='$NOTIFYLOG.cmd' '$ROOT/hooks/claude-status-hook.sh' set </dev/null >/dev/null 2>&1; sleep 0.4; [ -z \"\$(cat '$NOTIFYLOG')\" ]"
 rm -rf "$HOOKHOME" 2>/dev/null
 
+printf '\nrename\n'
+check "defines tmv and _t_rename_session" \
+  ". '$ROOT/shell/agents.sh'; declare -F tmv >/dev/null && declare -F _t_rename_session >/dev/null"
+check "refuses an empty name" \
+  "! ( . '$ROOT/shell/agents.sh'; _t_rename_session old '' 2>/dev/null )"
+check "refuses a name with a slash" \
+  "! ( . '$ROOT/shell/agents.sh'; _t_rename_session old 'a/b' 2>/dev/null )"
+check "refuses a name starting with a dash" \
+  "! ( . '$ROOT/shell/agents.sh'; _t_rename_session old '-x' 2>/dev/null )"
+check "renaming to the same name is a no-op, not an error" \
+  ". '$ROOT/shell/agents.sh'; _t_rename_session same same"
+check "tmv refuses outside tmux" \
+  "! ( . '$ROOT/shell/agents.sh'; unset TMUX; tmv newname 2>/dev/null )"
+check "tmv is not tr (the real command stays reachable)" \
+  ". '$ROOT/shell/agents.sh'; ! declare -F tr >/dev/null"
+check "the folder is deliberately left where it is" \
+  "grep -q 'FOLDER is deliberately left alone' '$ROOT/shell/agents.sh'"
+# sed -i takes an argument on BSD and refuses one on GNU, so every caller has to
+# go through _t_sed_inplace. The wrapper's own two branches are the exception.
+check "no sed -i outside the portability wrapper" \
+  "sed 's/#.*//' '$ROOT/shell/agents.sh' | awk '/^_t_sed_inplace\\(\\)/ { inw = 1 } inw && /^}/ { inw = 0 } !inw && /sed -i/ { bad = 1 } END { exit bad }'"
+
 printf '\nfile browser sub-modes\n'
 check "--list of a directory is non-empty" \
   "[ -n \"\$(TMUX_FILE_DIR='$ROOT' TMUX_FILE_MODE=dir '$ROOT/bin/tmux-file-picker.sh' --list)\" ]"

@@ -1,0 +1,64 @@
+# tmux-agents — keybindings, and the two settings agent detection depends on.
+#
+# This is a TEMPLATE. install.sh renders it to ~/.config/tmux-agents/agents.conf
+# with @TMUX_AGENTS_HOME@ replaced by wherever you cloned the repo, and adds a
+# single `source-file` line to your ~/.tmux.conf. tmux config has no notion of
+# "the directory this file is in", which is the whole reason for the render step.
+#
+# Editing the rendered copy works until the next install; edit this and re-run
+# ./install.sh to make it stick.
+
+# ---------------------------------------------------------------------------
+# prefix + a — the agent picker
+# ---------------------------------------------------------------------------
+# Every agent, with live status and a preview of its screen. From there: enter
+# jumps, ctrl-n starts a new agent, ctrl-s starts one beside the highlighted
+# agent in the same folder, ctrl-x kills one, ctrl-f browses its files.
+#
+# '#{client_tty}' is not decoration. tmux expands it here against the client that
+# pressed the key, and the picker needs it: inside a popup $TMUX_PANE is empty, so
+# a bare switch-client picks a client at random and drags the wrong terminal
+# window off to the agent you selected.
+bind a run-shell "@TMUX_AGENTS_HOME@/bin/tmux-agent-pick.sh '#{client_tty}'"
+
+# ---------------------------------------------------------------------------
+# prefix + f — the file browser
+# ---------------------------------------------------------------------------
+# Browse, preview and open the files the agent in this pane is working on.
+#
+# ⚠️  This REPLACES tmux's default prefix + f (find-window). `prefix + w`
+# (choose-tree) covers that ground. Comment this line out if you'd rather keep it,
+# or change the key — nothing else depends on which key it is.
+#
+# '#{pane_id}' is what roots the browser in the right folder; a popup has no
+# $TMUX_PANE of its own to work it out from.
+bind f run-shell "@TMUX_AGENTS_HOME@/bin/tmux-file-pick.sh '#{pane_id}' '#{client_tty}'"
+
+# ---------------------------------------------------------------------------
+# Load-bearing settings
+# ---------------------------------------------------------------------------
+# Claude Code renames its window to its own version string ("2.1.220"), which
+# makes every agent window look identical — and window names are how two agents
+# in the same session are told apart in the picker ("api:claude", "api:claude2").
+# So renaming is off and windows are named explicitly when they're created.
+#
+# Verified safe for status detection: with allow-rename off, pane_title still
+# tracks Claude Code's "<glyph> <task>" live. Only window_name is frozen.
+set -g allow-rename off
+setw -g automatic-rename off
+
+# ---------------------------------------------------------------------------
+# Status line counts — ●working ○idle ◆waiting-on-you
+# ---------------------------------------------------------------------------
+# Off unless you install with --with-status, because overwriting a status line
+# someone has spent time on is rude. To add the counts to your own instead, drop
+# this into your existing status-right:
+#
+#   #(@TMUX_AGENTS_HOME@/bin/tmux-agent-status.sh)
+#
+@STATUS_COMMENT@set -g status-interval 5
+@STATUS_COMMENT@set -g status-right "#(@TMUX_AGENTS_HOME@/bin/tmux-agent-status.sh)  #[fg=colour244]%a %H:%M"
+@STATUS_COMMENT@setw -g window-status-format "#[fg=colour244] #I #W#{?window_activity_flag,•,} "
+@STATUS_COMMENT@setw -g window-status-current-format "#[bg=colour238,fg=colour255,bold] #I #W "
+@STATUS_COMMENT@setw -g monitor-activity on
+@STATUS_COMMENT@set -g visual-activity off

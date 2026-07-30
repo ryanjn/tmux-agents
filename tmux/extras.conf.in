@@ -1,0 +1,83 @@
+# tmux-agents — optional quality-of-life settings for running agents in tmux.
+#
+# NOT required by anything in this repo. Installed only with `./install.sh
+# --with-extras`, because these are opinions about your tmux, not dependencies.
+# Read it, take what you want, or copy the lines into your own config instead.
+
+# ---------------------------------------------------------------------------
+# The one that matters most for Claude Code
+# ---------------------------------------------------------------------------
+# tmux waits 500ms after Esc to see whether it's part of an escape sequence.
+# Inside Claude Code that makes Esc (interrupt / clear input) feel broken. Zero is
+# safe on a local machine; raise it if you drive tmux over a laggy SSH link.
+set -sg escape-time 0
+
+# Let programs know when their pane gains or loses focus. Claude Code and editors
+# use this; without it they can't tell they've been backgrounded.
+set -g focus-events on
+
+# Let programs pass escape sequences straight through tmux. Needed for OSC 52
+# clipboard, terminal notifications, and inline image protocols.
+set -g allow-passthrough on
+
+# Copy to the system clipboard through the terminal via OSC 52. This is also what
+# makes the file browser's "copy path" work when pbcopy isn't available.
+set -g set-clipboard on
+
+# ---------------------------------------------------------------------------
+# Colour
+# ---------------------------------------------------------------------------
+# tmux-256color is the correct inner TERM (screen-256color is the legacy one and
+# loses features). It does NOT advertise truecolor, so add RGB for your outer
+# terminal explicitly or Claude Code's diffs render in 256 colours.
+set -g default-terminal "tmux-256color"
+set -as terminal-features ",xterm-ghostty:RGB"
+set -as terminal-features ",xterm-256color:RGB"
+
+# ---------------------------------------------------------------------------
+# Scrollback
+# ---------------------------------------------------------------------------
+# Agents produce a lot of output. 100k lines/pane is roughly 20-40MB each worst
+# case. Lower it if you run many panes on a memory-tight machine.
+set -g history-limit 100000
+
+# ---------------------------------------------------------------------------
+# Mouse and navigation
+# ---------------------------------------------------------------------------
+set -g mouse on
+set -g base-index 1
+setw -g pane-base-index 1
+set -g renumber-windows on
+setw -g aggressive-resize on
+
+# vi keys in copy mode (prefix + [ to enter, q to leave)
+setw -g mode-keys vi
+bind -T copy-mode-vi v send -X begin-selection
+
+# Splits and new windows inherit the current directory — so a shell you split off
+# beside an agent starts in that agent's folder.
+bind | split-window -h -c "#{pane_current_path}"
+bind - split-window -v -c "#{pane_current_path}"
+bind c new-window -c "#{pane_current_path}"
+
+# Pane navigation without the prefix
+bind -n M-Left  select-pane -L
+bind -n M-Right select-pane -R
+bind -n M-Up    select-pane -U
+bind -n M-Down  select-pane -D
+
+bind r source-file ~/.tmux.conf \; display "reloaded"
+
+# ---------------------------------------------------------------------------
+# If your agent lives in an alias
+# ---------------------------------------------------------------------------
+# `t NAME` starts the agent with send-keys into the pane's interactive shell, so
+# shell aliases apply and you land on a live shell when the agent exits instead of
+# the pane dying. But tmux starts a LOGIN shell by default, which reads
+# ~/.bash_profile / ~/.zprofile and never ~/.bashrc. If your `claude` alias lives
+# in ~/.bashrc, uncomment this to get a non-login interactive shell instead:
+#
+# set -g default-command "${SHELL}"
+
+# Don't let a dead shell take the pane's output with it before you've read it.
+set -g remain-on-exit off

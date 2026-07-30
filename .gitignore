@@ -1,0 +1,5 @@
+# Nothing generated lives in the repo — install.sh renders into
+# ~/.config/tmux-agents. These are just the usual local noise.
+.DS_Store
+*.bak-tmux-agents-*
+*.tmp.*

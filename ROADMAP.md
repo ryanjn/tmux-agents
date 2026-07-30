@@ -141,6 +141,46 @@ Learned the hard way; each one has killed a design already:
   good Linux equivalent yet.
 - **The status line is someone else's.** Anything that wants space there stays
   opt-in.
+- **Looking at an agent must not resize it.** Window size belongs to the window,
+  shared by every client viewing it — so a "board" built from live mirrors
+  (`tmux attach -r`, one pane per agent) *reflows the agents themselves*. Measured
+  2026-07-30: three agents at 200x50 dropped to 66x49 the moment the board opened,
+  and stayed there after it closed. Claude Code's boxes and diffs rewrap and are
+  mangled. This rules out live mirroring entirely; any board must be built from
+  `capture-pane` snapshots, which are read-only and touch nothing.
+
+## Deferred decisions
+
+Not roadmap items — questions with a recorded answer and a trigger for reopening
+them. They live here so the analysis isn't redone from scratch each time.
+
+### Should the board be a compiled TUI?
+
+**Answer for now: no. Build it in shell.** A `capture-pane` snapshot board on a
+1–2s redraw is sufficient for the actual job — glancing at half a dozen agents to
+see who is stuck. Everything a compiled TUI adds (mouse, smooth scrolling,
+per-cell scrollback, comfort at 20+ agents) is a want, and none of it appeared in
+any real incident so far.
+
+The cost isn't the code, it's the character of the project: a build step,
+per-platform binaries, a CI matrix, macOS notarization (or users get Gatekeeper
+warnings), and an install story that stops being "clone and run install.sh".
+Contributors could no longer just edit a file. That's two of the four non-goals.
+
+**Reopen it if any of these actually happen** — not if it merely feels appealing:
+
+1. The shell board's redraw is visibly laggy at the agent count you really run
+   (say >12 agents, or a repaint over ~200ms).
+2. You want something shell genuinely cannot do: mouse, per-cell scrollback,
+   smooth scroll.
+3. The board becomes where you *live*, rather than something you glance at.
+4. People avoid touching the board code because it has become unmaintainable awk.
+
+**If it is ever reopened, two things hold.** It stays optional — tmux-agents must
+work with no binary installed, because that install story is a feature. And it
+consumes `_t_agent_display` unchanged: pane id, session, cwd, glyph, status,
+label, task, age, procs, one row per agent, tab-separated. The data layer is
+already front-end agnostic, which is what makes deferring this free.
 
 ## How we'll know it's working
 

@@ -62,6 +62,8 @@ choose-tree, which this project's own docs point people at.
 | **The board** — one popup, every agent, last few lines each | Replaces "open picker, arrow down, read, arrow down, read" with one glance. The headline feature of this release | L |
 | **Last-activity time per agent** | Distinguishes "thinking" from "wedged 40 minutes ago", which the spinner cannot | S |
 | **Filter keys in the picker** (waiting only / this folder only) | Narrows five agents to the two that matter | S |
+| **"What is this agent doing to my machine?"** — child processes spawned, and whether it's writing outside its own folder | Added 2026-07-30 after an agent fanned out hundreds of `op item edit` processes across a password vault. The screen preview said "Running 1 shell command"; the only real signal was a storm of macOS permission dialogs. Status tells you an agent is *busy*, never that it's busy doing something with a blast radius | M |
+| **Doctor: warn when the tmux server outlives the app that launched it** | Same day: a server started from iTerm 22 hours earlier meant every macOS permission prompt named a dead app, and no amount of clicking Allow could stick. Nothing surfaced that. `#{pid}` + start time + the stale `TERM_PROGRAM` in the global env is all it takes | S |
 
 ⚠️ The board is where shell scripting starts to strain — it wants live refresh and
 layout. If it turns into a fight, that's the moment to consider a small compiled
@@ -76,6 +78,7 @@ cheaper than discovering it late.
 |---|---|---|
 | **Send a path to another agent** — from the file browser, pick a target agent, and it lands in that agent's prompt | Today: copy, navigate, paste, return. This is the single most common cross-agent action and it currently costs four context switches | M |
 | **Send the current selection** (copy-mode text) to an agent | Same shape, for error messages and log lines rather than paths | M |
+| **Leave a note for an agent** — append to its `CLAUDE.md` from the picker | Discovered by using it: the seeded `CLAUDE.md` turned out to be the natural channel for telling *another* agent something, because Claude Code loads it at session start. Cheaper than the send-to-prompt version and it survives the agent restarting | S |
 | **Changed-files view in the browser** — files touched since the agent started, `ctrl-d` for a diff | Turns "what did it do?" into a keystroke instead of a review session | M |
 
 ## 0.5 — Start work without ceremony

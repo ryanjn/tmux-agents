@@ -37,6 +37,18 @@ for fn in t tl ta ts tk tmv tq tf tsave trestore tdoctor tpower; do
   check "defines $fn" \
     "bash -c 'for f in agents.sh quick-agents.sh tmux-persist.sh favorites.sh; do . \"$ROOT/shell/\$f\"; done; declare -F $fn >/dev/null || type $fn >/dev/null 2>&1'"
 done
+# The doctor asserts a list of function names. When a function is renamed or
+# dropped, that list is what goes stale — and it fails at the user, not here.
+check "every function the doctor expects is actually defined" \
+  "bash -c '
+    for f in agents.sh quick-agents.sh tmux-persist.sh favorites.sh; do . \"$ROOT/shell/\$f\"; done
+    miss=\"\"
+    for fn in \$(sed -n \"s/^  for fn in \\(.*\\) \\\\\\\\\$/\\1/p;s/^            \\(_t_.*\\); do\\\$/\\1/p\" \"$ROOT/bin/tmux-agents-doctor.sh\"); do
+      declare -F \"\$fn\" >/dev/null 2>&1 || miss=\"\$miss \$fn\"
+    done
+    [ -z \"\$miss\" ] || { echo \"missing:\$miss\" >&2; exit 1; }
+  '"
+
 check "_TA_BIN resolves to this clone's bin/" \
   "bash -c '. \"$ROOT/shell/agents.sh\"; [ \"\$_TA_BIN\" = \"$ROOT/bin\" ]'"
 check "tmux-favorites-pick.sh finds favorites.sh where it looks for it" \

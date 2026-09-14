@@ -99,11 +99,16 @@ else
 fi
 
 # The two launchd jobs: snapshot/restore/lifecycle every 5 min, battery guard every 60s.
+# Opt-in, so "not loaded" is a choice, not a fault. Without them: snapshots
+# still happen on tmux's own hooks, but there is no 5-minute clock, no restore
+# at login, and no battery guard.
 for job in persist power; do
   if launchctl print "gui/$(id -u)/com.tmux-agents.$job" >/dev/null 2>&1; then
     ok "launchd job com.tmux-agents.$job is loaded"
+  elif [ -e "$HOME/Library/LaunchAgents/com.tmux-agents.$job.plist" ]; then
+    bad "com.tmux-agents.$job is installed but NOT loaded — fix: launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tmux-agents.$job.plist"
   else
-    bad "launchd job com.tmux-agents.$job is NOT loaded — fix: cp $HOME_DIR/macos/com.tmux-agents.$job.plist ~/Library/LaunchAgents/ && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tmux-agents.$job.plist"
+    warn "com.tmux-agents.$job is not installed (optional) — add it with: $HOME_DIR/install.sh --with-launchd"
   fi
 done
 
@@ -182,7 +187,7 @@ if [ -r "$HOME_DIR/shell/agents.sh" ] && . "$HOME_DIR/shell/agents.sh" 2>/dev/nu
   . "$HOME_DIR/shell/tmux-persist.sh" 2>/dev/null || warn "shell/tmux-persist.sh does not load"
   . "$HOME_DIR/shell/quick-agents.sh" 2>/dev/null || warn "shell/quick-agents.sh does not load"
   . "$HOME_DIR/shell/favorites.sh" 2>/dev/null || warn "shell/favorites.sh does not load"
-  for fn in t th tl ta ts tw tk tmv tq tf tsleep twake tsnaps tsave trestore tarchive tpower tdoctor \
+  for fn in t tl ta ts tw tk tmv tq tf tsleep twake tsnaps tsave trestore tarchive tpower tdoctor \
             _t_agent_rows _t_new_session _t_kill_agent _t_agent_pid _t_agent_sid; do
     declare -F "$fn" >/dev/null 2>&1 || missing="$missing $fn"
   done
@@ -307,7 +312,7 @@ fi
 # ---------------------------------------------------------------------------
 head_ "Name collisions"
 clash=0
-for fn in t th tl ta ts tw tk td tq tf tmv; do
+for fn in t tl ta ts tw tk td tq tf tmv; do
   # type -aP lists only real files on $PATH, which is the whole question here.
   # Plain `type -a` would report the functions this script just sourced itself,
   # and its multi-line function bodies, as if they were collisions.

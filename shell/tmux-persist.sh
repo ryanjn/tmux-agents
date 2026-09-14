@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # tmux-persist — shell front end for surviving a macOS restart.
 #
 # A tmux server is a process. A reboot kills it, and every session with it —

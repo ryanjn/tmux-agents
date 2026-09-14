@@ -353,7 +353,7 @@ if [ "$WITH_SHELL" = 1 ]; then
   # other. Each line is guarded, so removing a file just removes its commands.
   SHELL_LINES=""
   for sf in agents.sh quick-agents.sh tmux-persist.sh favorites.sh; do
-    SHELL_LINES="$SHELL_LINES[ -r \"$HOME_DIR/shell/$sf\" ] && . \"$HOME_DIR/shell/$sf\"
+    SHELL_LINES="${SHELL_LINES}[ -r \"$HOME_DIR/shell/$sf\" ] && . \"$HOME_DIR/shell/$sf\"
 "
   done
   write_block "$RC_FILE" \

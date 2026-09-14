@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # tmux-agents — shell helpers
 # https://github.com/ryanjn/tmux-agents
 #

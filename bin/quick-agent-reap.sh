@@ -89,7 +89,8 @@ _qa_safe_target() {
 #     ONLY while it still carries "_Not recorded yet._". Once you have replaced
 #     that section with what the session is for, the file is something you
 #     wrote and the folder is no longer disposable — even if it is the only
-#     file there (add-music-to-elevenlabs-cli is exactly that).
+#     file there — a folder whose whole content is a filled-in brief is still
+#     a folder you meant to keep.
 #   - the ephemeral note `tq` writes into a scratch dir, identified by a marker
 #     line rather than by its prose so rewording it later can't break this.
 _qa_generated_note() {

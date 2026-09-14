@@ -54,10 +54,14 @@ tsnaps() {
     [ -n "$f" ] || { echo "no snapshots in $dir" >&2; return 1; }
     sed -n '2,4p' "$f" | sed 's/^# //'
     echo
+    # Columns are fixed by the header tmux-agent-save.sh writes:
+    #   $15 is_agent, $16 task, $17 session_id. These were $12/$13 before pane_id,
+    #   opt_sid and opt_task were added ahead of them, which made every session
+    #   read "0 agents" — the data was right, the listing was three columns behind.
     awk -F'\t' '
       /^P/ {
         n[$2]++
-        if ($12 == 1) { a[$2]++; if (task[$2] == "") task[$2] = $13; else task[$2] = task[$2] "; " $13 }
+        if ($15 == 1) { a[$2]++; if (task[$2] == "") task[$2] = $16; else task[$2] = task[$2] "; " $16 }
       }
       END { for (s in n) printf "%-44s %d panes  %d agents  %s\n", s, n[s], a[s]+0, task[s] }
     ' "$f" | sort

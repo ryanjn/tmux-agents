@@ -64,6 +64,11 @@ before it was published; what is new is that it is here, generalised, and tested
 
 ### Fixed
 
+- `tsnaps -l` reported **0 agents** for every session. Columns had been inserted
+  into the snapshot ahead of `is_agent` and the listing kept reading the old
+  positions. Display only — the snapshots themselves were correct and `trestore`
+  reads them by name, so nothing was ever lost. The column order is now pinned by
+  a test.
 - `trestore` and every wake path record the agent's session id *before* stopping
   the process and resume with `claude -r <id>`. `claude --continue` resolves by
   **directory**, not by agent, so agents sharing a folder would otherwise all come

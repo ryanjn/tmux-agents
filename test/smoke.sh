@@ -353,6 +353,22 @@ check "--login-shell forces tmux's default back" \
 check "--no-login-shell forces it on" \
   "rm -rf '$LSH/f2' && mkdir -p '$LSH/f2/.config' && printf '. ~/.bashrc\n' > '$LSH/f2/.bash_profile' && printf 'alias c=x\n' > '$LSH/f2/.bashrc' && : > '$LSH/f2/.tmux.conf' && HOME='$LSH/f2' XDG_CONFIG_HOME='$LSH/f2/.config' SHELL=/bin/bash '$ROOT/install.sh' --no-cli --no-login-shell --rc '$LSH/f2/.bash_profile' --tmux-conf '$LSH/f2/.tmux.conf' >/dev/null 2>&1 && grep -qE '^set -g default-command' '$LSH/f2/.config/tmux-agents/agents.conf'"
 
+# The snapshot is a TSV with a fixed column order, written in one place and read
+# in three. When columns were inserted ahead of is_agent, `tsnaps -l` kept reading
+# the old positions and reported "0 agents" against data that was correct. Pin the
+# contract to the header the writer emits, so a future insert fails here.
+SNAPCOLS='P session window_index window_name window_active window_layout pane_index pane_active cwd command title pane_id opt_sid opt_task is_agent task session_id'
+check "the snapshot writer still emits the column order everyone reads" \
+  "grep -qF '$SNAPCOLS' '$ROOT/bin/tmux-agent-save.sh'"
+check "is_agent is column 15, task 16, session_id 17" \
+  "[ \"\$(printf '%s\n' $SNAPCOLS | grep -nx is_agent | cut -d: -f1)\" = 15 ] &&
+   [ \"\$(printf '%s\n' $SNAPCOLS | grep -nx task | cut -d: -f1)\" = 16 ] &&
+   [ \"\$(printf '%s\n' $SNAPCOLS | grep -nx session_id | cut -d: -f1)\" = 17 ]"
+check "tsnaps -l reads is_agent at 15, not an older position" \
+  "grep -q 'if (\$15 == 1)' '$ROOT/shell/tmux-persist.sh' && ! grep -q 'if (\$12 == 1)' '$ROOT/shell/tmux-persist.sh'"
+check "trestore reads the snapshot by name, in writer order" \
+  "grep -q 'read -r tag session widx wname wactive wlayout pidx pactive cwd cmd title paneid optsid opttask isagent task sid' '$ROOT/bin/tmux-agent-restore.sh'"
+
 check "launchd plists are templates, not one person's paths" \
   "grep -q '@TMUX_AGENTS_HOME@' '$ROOT/macos/com.tmux-agents.persist.plist.in' && ! grep -rq '/Users/' '$ROOT/macos'"
 check "--with-launchd --dry-run renders without loading anything" \

@@ -130,10 +130,17 @@ leaves this repo's own working tree untouched. Two traps found the hard way:
 - **`> symlink` writes *through* the link.** A test that dropped a decoy file over
   an installed command symlink overwrote the real script in `bin/`. `rm -f` the
   link first, then create the file.
-- **The `sh` rule applies to `shell/agents.sh` only.** `run-shell` sources that one
-  under `sh`, so process substitution there is fatal. The other three shell files
-  are sourced exclusively by bash scripts and may use it — a blanket ban across
-  `shell/*.sh` produces false failures.
+- **`sh` never parses our shell files, and the test that said otherwise was
+  wrong.** The belief was that `run-shell` sources `shell/agents.sh` under `sh`.
+  It does not: every `run-shell` in the tmux config invokes a script *file*, each
+  with a `#!/usr/bin/env bash` shebang, and those scripts source the helpers from
+  bash. `agents.sh` has 17 array constructs and 8 here-strings — it has always
+  been openly bash, and `sh -n` on it only passed because macOS `/bin/sh` is bash
+  in sh-mode. The first Linux CI run failed on it in seconds. What is actually
+  load-bearing is the shebang contract, and `smoke.sh` now checks that instead.
+- **`run-shell` itself still runs `sh -c`**, so the command *string* in the tmux
+  config must be sh-safe. That is a different constraint from the file it invokes,
+  and it is the one that survives.
 
 ## Things that are true and cost time to learn
 

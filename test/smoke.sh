@@ -73,6 +73,23 @@ check "every function the doctor expects is actually defined" \
     [ -z \"\$miss\" ] || { echo \"missing:\$miss\" >&2; exit 1; }
   '"
 
+# A file your rc sources must return 0. quick-agents.sh ended with a
+# `tmux set-hook -g`, which needs a running SERVER — so with tmux installed and
+# no server up (every first shell after a reboot) the hook failed and, being the
+# last command, became the file's exit status. Under `set -e` in an rc that
+# aborts the rest of your shell startup.
+#
+# TMUX_TMPDIR at an empty directory is how "installed but no server" is
+# simulated; plain `unset TMUX` is not enough, since tmux still finds the socket.
+NOSRV=$(mktemp -d)
+for f in agents quick-agents tmux-persist favorites; do
+  check "shell/$f.sh returns 0 with tmux installed but no server running" \
+    "[ \"\$(env -u TMUX TMUX_TMPDIR='$NOSRV' bash -c '
+        . \"$ROOT/shell/agents.sh\" >/dev/null 2>&1
+        . \"$ROOT/shell/$f.sh\" >/dev/null 2>&1
+        echo \$?')\" = 0 ]"
+done
+
 check "_TA_BIN resolves to this clone's bin/" \
   "bash -c '. \"$ROOT/shell/agents.sh\"; [ \"\$_TA_BIN\" = \"$ROOT/bin\" ]'"
 check "tmux-favorites-pick.sh finds favorites.sh where it looks for it" \

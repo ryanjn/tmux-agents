@@ -1,0 +1,99 @@
+# Changelog
+
+Notable changes per release. Dates are the release date, newest first.
+
+## 0.3.0 — 2026-09-14
+
+**Survive the machine going away.** A reboot no longer costs anything, idle agents
+stop accumulating, and the agents you start often start themselves.
+
+This release reconciles six weeks of work that had been landing in a private
+dotfiles repo rather than here — the published tree had stopped at 0.2.4 while the
+version in daily use moved well past it. Everything below was already in service
+before it was published; what is new is that it is here, generalised, and tested.
+
+### Added
+
+- **Snapshot and restore.** `tsave`, `trestore`, `tsnaps`. The shape of the tmux
+  server is written to disk on every change — ten tmux hooks fire a coalescing
+  autosave — and replayed afterwards. `trestore --resume` starts the agents too,
+  rather than leaving each pane at a shell.
+- **Sleep and wake.** `prefix + S` / `prefix + R`, `ctrl-o` in the picker,
+  `tsleep` / `twake`. Sleeping exits the process and keeps the conversation; an
+  idle agent holds roughly 400MB, and most are waiting on an answer that is not
+  coming today. Sleeping agents show `☾`, and enter in the picker wakes one.
+- **Ageing.** `tlifecycle` sleeps at 48h idle and shuts down at 7 days. Nothing is
+  destroyed: `tarchive` lists what went and `tarchive restore NAME` brings it back
+  on its exact conversation.
+- **Battery guard.** `tpower` sleeps idle agents below 10% on battery.
+- **Favorites.** `tf`, `prefix + F`. A favorite is *defaults for a name* — its
+  folder or repo and what window 1 runs — so `t NAME` and the picker honour it
+  too, rather than it being a separate launcher.
+- **Throwaway agents.** `tq` starts one in a scratch dir under `~/.cache`, with
+  `tq done` to discard, `tq keep` to promote and `tq gc` to sweep. For the asks
+  that would otherwise leave a folder whose only content is the note explaining
+  that the folder exists.
+- **`prefix + A` / `prefix + B`** — add an agent to this window on the same
+  folder, re-tiling as they accumulate; send one back to where it came from.
+- **Desktop notifications** through OSC 777, gated on `@agent-notify`, which is
+  read at fire time so `tmux set -g @agent-notify 0` silences it with no reload.
+- **Commands outside an interactive shell.** `install.sh` symlinks `tsave`,
+  `tdoctor`, `tf` and the rest into `~/.local/bin`, because shell functions are
+  invisible to `cron`, `launchd` and `ssh host tsave`. `--no-cli` opts out; a real
+  file already at one of those names is never overwritten.
+- **`--with-launchd`** installs the 5-minute snapshot job and the battery guard as
+  launchd agents. Opt-in: everything works without them, by hand.
+- **Login-shell detection.** tmux starts a login shell, which on bash reads
+  `~/.bash_profile` and never `~/.bashrc`. If `claude` is an alias in `~/.bashrc`,
+  a login shell silently resolves it to the bare binary — the same word with
+  different flags, reported nowhere. The installer now checks whether your
+  interactive file is reachable from your login file and renders
+  `default-command` only when it is not. `--login-shell` / `--no-login-shell`
+  override.
+
+### Changed
+
+- `TMUX_AGENT_EXTRA_PROCS` now defaults to empty. Agent CLIs that set no pane
+  title are still detected by process name, but only ones you name.
+- The `☾` glyph joins `●` `○` `◆` in `ta`, the picker and the status line.
+- The doctor checks the rendered `~/.config/tmux-agents/agents.conf` and that
+  something sources it, rather than expecting a symlinked `~/.tmux.conf`. It also
+  reports the optional launchd jobs as absent-by-choice rather than as faults.
+- The roadmap renumbered: reconstruction shipped ahead of the board, so the board
+  is now 0.4, handoff 0.5 and ceremony 0.6.
+
+### Fixed
+
+- `trestore` and every wake path record the agent's session id *before* stopping
+  the process and resume with `claude -r <id>`. `claude --continue` resolves by
+  **directory**, not by agent, so agents sharing a folder would otherwise all come
+  back as whichever spoke last.
+
+### Notes for anyone extending this
+
+- **`claude --continue` resolves by directory.** Anything new that restarts an
+  agent must record the session id first, or it will silently merge conversations
+  — and the failure looks like an agent that lost its memory, not like a bug.
+- **`> symlink` writes through the link.** A test that dropped a decoy file over
+  an installed command symlink overwrote the real script in `bin/`.
+- **The no-process-substitution rule is `shell/agents.sh` only.** `run-shell`
+  sources that file under `sh`. The other three are sourced only by bash.
+
+### Tests
+
+107 → 158 checks, and the suite now asserts it leaves the working tree untouched.
+
+## 0.2.4
+
+Context each agent is carrying, shown in `ta` and the picker, read from Claude
+Code's transcript and attributed via a hook-recorded path.
+
+## 0.2.1
+
+Last-activity time per agent, the `⚙N` fan-out flag, and a doctor warning when the
+tmux server has outlived the terminal that started it.
+
+## 0.2.0
+
+Never wonder who needs you: `prefix + j`, waiting times, waiting-first ordering in
+the picker, and opt-in desktop notifications.

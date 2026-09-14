@@ -325,6 +325,34 @@ check "never clobbers a real file at one of our command names" \
   "grep -q 'not ours' '$TMPHOME/.local/bin/tf'"
 rm -f "$TMPHOME/.local/bin/tf"
 
+# tmux starts a login shell; bash logins never read ~/.bashrc. Getting this
+# wrong means `t` starts an agent with the bare binary instead of your alias —
+# same word, different flags, and nothing reports it.
+LSH="$TMPHOME/lsh"
+lsh_case() { # name  bash_profile-content  expected(set|unset)
+  rm -rf "$LSH/$1"; mkdir -p "$LSH/$1/.config"
+  printf '%s\n' "$2" > "$LSH/$1/.bash_profile"
+  printf 'alias claude="claude --x"\n'  > "$LSH/$1/.bashrc"
+  : > "$LSH/$1/.tmux.conf"
+  HOME="$LSH/$1" XDG_CONFIG_HOME="$LSH/$1/.config" SHELL=/bin/bash \
+    "$ROOT/install.sh" --no-cli --rc "$LSH/$1/.bash_profile" --tmux-conf "$LSH/$1/.tmux.conf" >/dev/null 2>&1
+  if grep -qE '^set -g default-command' "$LSH/$1/.config/tmux-agents/agents.conf"; then echo set; else echo unset; fi
+}
+check "login shell that never reads .bashrc gets default-command" \
+  "[ \"\$(lsh_case unreachable '# .bashrc sources this file, not the reverse')\" = set ]"
+check ".bash_profile that sources .bashrc is left alone" \
+  "[ \"\$(lsh_case plain '. \$HOME/.bashrc')\" = unset ]"
+check "the if-then form counts as sourcing it" \
+  "[ \"\$(lsh_case ifthen 'if [ -f ~/.bashrc ]; then . ~/.bashrc; fi')\" = unset ]"
+check "a commented-out source does not count" \
+  "[ \"\$(lsh_case commented '#. ~/.bashrc')\" = set ]"
+check "a path containing a dot is not a source command" \
+  "[ \"\$(lsh_case dotpath 'export PATH=\$PATH:/opt/x.y/bin')\" = set ]"
+check "--login-shell forces tmux's default back" \
+  "rm -rf '$LSH/f1' && mkdir -p '$LSH/f1/.config' && printf '# nothing\n' > '$LSH/f1/.bash_profile' && printf 'alias c=x\n' > '$LSH/f1/.bashrc' && : > '$LSH/f1/.tmux.conf' && HOME='$LSH/f1' XDG_CONFIG_HOME='$LSH/f1/.config' SHELL=/bin/bash '$ROOT/install.sh' --no-cli --login-shell --rc '$LSH/f1/.bash_profile' --tmux-conf '$LSH/f1/.tmux.conf' >/dev/null 2>&1 && ! grep -qE '^set -g default-command' '$LSH/f1/.config/tmux-agents/agents.conf'"
+check "--no-login-shell forces it on" \
+  "rm -rf '$LSH/f2' && mkdir -p '$LSH/f2/.config' && printf '. ~/.bashrc\n' > '$LSH/f2/.bash_profile' && printf 'alias c=x\n' > '$LSH/f2/.bashrc' && : > '$LSH/f2/.tmux.conf' && HOME='$LSH/f2' XDG_CONFIG_HOME='$LSH/f2/.config' SHELL=/bin/bash '$ROOT/install.sh' --no-cli --no-login-shell --rc '$LSH/f2/.bash_profile' --tmux-conf '$LSH/f2/.tmux.conf' >/dev/null 2>&1 && grep -qE '^set -g default-command' '$LSH/f2/.config/tmux-agents/agents.conf'"
+
 check "launchd plists are templates, not one person's paths" \
   "grep -q '@TMUX_AGENTS_HOME@' '$ROOT/macos/com.tmux-agents.persist.plist.in' && ! grep -rq '/Users/' '$ROOT/macos'"
 check "--with-launchd --dry-run renders without loading anything" \

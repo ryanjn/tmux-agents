@@ -75,17 +75,6 @@ bind -n M-Down  select-pane -D
 bind r source-file ~/.tmux.conf \; display "reloaded"
 
 # ---------------------------------------------------------------------------
-# If your agent lives in an alias
-# ---------------------------------------------------------------------------
-# `t NAME` starts the agent with send-keys into the pane's interactive shell, so
-# shell aliases apply and you land on a live shell when the agent exits instead of
-# the pane dying. But tmux starts a LOGIN shell by default, which reads
-# ~/.bash_profile / ~/.zprofile and never ~/.bashrc. If your `claude` alias lives
-# in ~/.bashrc, uncomment this to get a non-login interactive shell instead:
-#
-# set -g default-command "${SHELL}"
-
-# ---------------------------------------------------------------------------
 # Status bar styling
 # ---------------------------------------------------------------------------
 # Pure cosmetics, and separate from the agent counts on purpose: the counts live

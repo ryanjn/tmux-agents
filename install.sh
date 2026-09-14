@@ -6,6 +6,8 @@
 #   ./install.sh --with-extras   also install the optional tmux QoL settings
 #   ./install.sh --with-launchd  also load the save/restore and battery jobs
 #   ./install.sh --no-cli        skip the ~/.local/bin command symlinks
+#   ./install.sh --login-shell   force tmux's default login shell in panes
+#   ./install.sh --no-login-shell  force a non-login interactive shell instead
 #   ./install.sh --no-shell      tmux keybindings only, no shell functions
 #   ./install.sh --dry-run       print every change, make none
 #   ./install.sh --uninstall     remove everything this added
@@ -36,6 +38,7 @@ WITH_STATUS=0
 WITH_EXTRAS=0
 WITH_LAUNCHD=0
 WITH_CLI=1
+LOGIN_SHELL=auto
 WITH_SHELL=1
 DRY_RUN=0
 UNINSTALL=0
@@ -83,6 +86,8 @@ while [ $# -gt 0 ]; do
     --with-extras) WITH_EXTRAS=1 ;;
     --with-launchd) WITH_LAUNCHD=1 ;;
     --no-cli)      WITH_CLI=0 ;;
+    --login-shell)    LOGIN_SHELL=1 ;;
+    --no-login-shell) LOGIN_SHELL=0 ;;
     --no-shell)    WITH_SHELL=0 ;;
     --dry-run)     DRY_RUN=1 ;;
     --uninstall)   UNINSTALL=1 ;;
@@ -269,6 +274,46 @@ fi
 say ""
 say "${B}Writing config${Z}"
 
+# ---------------------------------------------------------------------------
+# Login shell, or not
+# ---------------------------------------------------------------------------
+# tmux starts a LOGIN shell. bash logins read ~/.bash_profile and never
+# ~/.bashrc; zsh logins read ~/.zprofile and never ~/.zshrc. If the file holding
+# your aliases is not reachable from there, `t` starts an agent whose `claude` is
+# the bare binary rather than your alias — the same word, different behaviour,
+# and nothing reports it. Rather than guess, look.
+#
+# Deliberately conservative: only when the interactive file exists AND the login
+# file demonstrably does not pull it in. An unreadable or absent login file means
+# we cannot tell, and we leave tmux's default alone.
+detect_login_shell() {
+  case "${SHELL##*/}" in
+    bash) login_f="$HOME/.bash_profile"; inter_f="$HOME/.bashrc" ;;
+    zsh)  login_f="${ZDOTDIR:-$HOME}/.zprofile"; inter_f="${ZDOTDIR:-$HOME}/.zshrc" ;;
+    *)    return 1 ;;
+  esac
+  [ -r "$inter_f" ] || return 1
+  [ -r "$login_f" ] || return 1
+  # Does the login file source the interactive one? Comments are stripped first,
+  # then a real sourcing line is matched in any of its usual shapes:
+  #   . ~/.bashrc    source $HOME/.bashrc    [ -f ~/.bashrc ] && . ~/.bashrc
+  #   if [ -f ~/.bashrc ]; then . ~/.bashrc; fi
+  # Requiring whitespace after the dot is what keeps a path like /opt/x.y/bin
+  # from counting as a source command.
+  base=$(basename "$inter_f")
+  if sed 's/#.*//' "$login_f" 2>/dev/null \
+     | grep -qE "(^|[[:space:]])(\.|source)[[:space:]]+[^[:space:];&|]*${base}"; then
+    return 1
+  fi
+  return 0
+}
+
+if [ "$LOGIN_SHELL" = auto ]; then
+  if detect_login_shell; then DEFAULT_COMMAND=""; else DEFAULT_COMMAND="# "; fi
+elif [ "$LOGIN_SHELL" = 0 ]; then DEFAULT_COMMAND=""
+else DEFAULT_COMMAND="# "
+fi
+
 render() {              # render IN OUT
   in="$1"; out="$2"
   if [ "$WITH_STATUS" = 1 ]; then status_comment=""; else status_comment="# "; fi
@@ -277,6 +322,7 @@ render() {              # render IN OUT
   sed -e "s|@TMUX_AGENTS_HOME@|$HOME_DIR|g" \
       -e "s|@STATUS_COMMENT@|$status_comment|g" \
       -e "s|@HOME@|$HOME|g" \
+      -e "s|@DEFAULT_COMMAND@|$DEFAULT_COMMAND|g" \
       "$in" > "$out"
 }
 

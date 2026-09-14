@@ -11,7 +11,7 @@
 #
 #   tmux-agent-save.sh [-L SOCKET]
 #
-# Runs from launchd every 5 minutes (see macos/com.tmux-agents.tmux-save.plist)
+# Runs from launchd every 5 minutes (see macos/com.tmux-agents.persist.plist.in)
 # and costs one tmux query. Restore with tmux-agent-restore.sh.
 #
 # ⚠️  Deliberately does NOT save scrollback. 30 sessions x 100k lines of history

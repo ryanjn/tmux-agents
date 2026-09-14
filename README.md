@@ -62,6 +62,8 @@ stacked on re-run, and every file it edits is backed up first.
 ./install.sh --no-shell      # keybindings only, no shell functions
 ./install.sh --with-launchd  # also load the snapshot and battery jobs (macOS)
 ./install.sh --no-cli        # skip the ~/.local/bin command symlinks
+./install.sh --login-shell   # keep tmux's default login shell in panes
+./install.sh --no-login-shell # force a non-login interactive shell
 ./install.sh --uninstall     # remove all of it
 ```
 
@@ -81,6 +83,18 @@ those names is never overwritten.
 your terminal should be something you asked for. Without it you lose the
 five-minute snapshot clock, the restore at login, and the battery guard;
 everything still works by hand via `tsave` / `trestore` / `tpower`.
+
+**If your agent is a shell alias, read this one.** tmux starts a **login** shell,
+and a bash login reads `~/.bash_profile` and *never* `~/.bashrc` (zsh: `.zprofile`,
+never `.zshrc`). So if `claude` is an alias in `~/.bashrc` — say
+`claude --dangerously-skip-permissions` — a login shell silently resolves it to
+the bare binary instead. Same word, different flags, and nothing anywhere tells
+you. `t` then starts agents that behave unlike the ones you start by hand.
+
+The installer looks rather than guesses: if it can see that your interactive file
+exists and your login file does not source it, it renders
+`set -g default-command "${SHELL}"` so panes get a non-login interactive shell.
+Override with `--login-shell` / `--no-login-shell`.
 
 Three deliberate omissions: **your status line is left alone** unless you ask
 (`--with-status`), **no background jobs** unless you ask (`--with-launchd`), and

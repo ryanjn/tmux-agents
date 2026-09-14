@@ -116,6 +116,21 @@ bind B run-shell "@TMUX_AGENTS_HOME@/bin/tmux-agent-do.sh home '#{pane_id}'"
 set -g allow-rename off
 setw -g automatic-rename off
 
+# ---------------------------------------------------------------------------
+# If your agent lives in a shell alias
+# ---------------------------------------------------------------------------
+# `t NAME` starts the agent by send-keys into the pane's interactive shell, so
+# your aliases apply and you land on a live shell when the agent exits rather
+# than the pane dying. But tmux starts a LOGIN shell, which reads ~/.bash_profile
+# or ~/.zprofile and never ~/.bashrc. If `claude` is an alias in ~/.bashrc, a
+# login shell silently gets the bare binary instead — same command, different
+# flags, and nothing anywhere says so.
+#
+# install.sh renders this line in only when it can see that your interactive
+# config is unreachable from a login shell. Force it either way with
+# --login-shell / --no-login-shell.
+@DEFAULT_COMMAND@set -g default-command "${SHELL}"
+
 # "all", not "on". Desktop notifications ride this: tmux-agent-notify.sh writes
 # OSC 777 into the waiting agent's pane for the terminal to show, and the agent
 # that needs you is by definition in a window you are NOT looking at. "on"

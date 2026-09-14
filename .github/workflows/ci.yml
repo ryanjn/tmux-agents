@@ -1,0 +1,34 @@
+name: CI
+
+# The bug classes in this codebase are subtle and have all actually happened:
+# a `< <(…)` in a file that run-shell sources under sh, silently truncating it;
+# a locale that turns a TAB into "_" and corrupts every snapshot; an awk column
+# that shifted and made a listing read "0 agents" against correct data. None of
+# those announce themselves. A green tick is the cheapest way to catch them.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # smoke.sh starts no tmux server by design, but it runs install.sh, which
+      # refuses outright without the binary.
+      - name: Install tmux and shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tmux shellcheck
+          tmux -V && shellcheck --version | head -2
+
+      # -S error, not -S warning. The warning list is long and grinding it down
+      # is not what this gate is for; making it a precondition is how CI stalls.
+      - name: shellcheck
+        run: shellcheck -S error bin/*.sh shell/*.sh hooks/*.sh install.sh test/*.sh
+
+      - name: smoke
+        run: bash test/smoke.sh

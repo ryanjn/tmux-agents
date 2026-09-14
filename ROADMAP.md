@@ -20,10 +20,12 @@ every change and replayed at login, agents sleep and wake on their exact
 conversations, and idle ones age out instead of accumulating. That pulled the
 milestone numbering forward, so the board is **0.4** below, not 0.3.
 
-**Next: 0.3.1, trust the instrument.** Before the board, a small release that
-makes the tool's own failures visible. Everything in this roadmap assumes the
-readings are true, and right now a total blackout of agent detection reports as a
-green tick. That is a cheap fix and it gates the value of everything after it.
+**v0.3.1 shipped tax zero.** The doctor now checks detection against a second,
+independent signal rather than reporting that it ran; CI runs both suites on
+every push; and `test/integration.sh` drives a real server on its own socket.
+Building it found what it was built to find — two implementations of "is this
+pane an agent" that disagreed, and an rc file that returned non-zero whenever no
+tmux server was running.
 
 **Then the 0.4 board** — one popup, every agent, last few lines each, built from
 `capture-pane` snapshots — with stuck-detection alongside it, since "who is
@@ -58,7 +60,7 @@ fails loudly or not at all.
 
 | Tax | Covered by | Gap |
 |---|---|---|
-| **0 · Trust** | The doctor checks deps, wiring, keys, hooks, shadowed names | **The weakest square on this table.** Detection itself is unverified: the doctor reports that it *ran*, never that it was *right*. 162 tests exist and nothing runs them on push |
+| **0 · Trust** | Detection cross-checked against an independent signal, CI on every push, integration tests on a throwaway server | **Handled for the failures we can name.** Residual: a title like `~ /some/path` satisfies both detectors and still reads as an agent — that needs a glyph allowlist, not a shape test |
 | Routing | `prefix + j`, waiting times, waiting-first order, opt-in notifications | Largely handled — but nothing tells you an agent is *stuck* rather than thinking, and that is the expensive half |
 | Reconstruction | Snapshot/restore, sleep/wake on exact conversations, ageing, `tarchive` | **Largely handled** on one machine. It has no concept of a second one: the snapshot stamps its hostname and nothing ever reads it back |
 | Awareness | The picker list | One agent at a time, only while the popup is open, and no way to search across agents at all |
@@ -111,9 +113,9 @@ above depends on recording the session id first. A future feature that restarts 
 agent without doing so will silently merge conversations, and the failure looks
 like an agent that has lost its memory rather than like a bug here.
 
-## 0.3.1 — Trust the instrument
+## 0.3.1 — Trust the instrument — **shipped in 0.3.1**
 
-*Tax zero. Small, and it gates everything after it.*
+*Tax zero. Small, and it gated everything after it.*
 
 Every feature in this roadmap reads from one heuristic: an agent is a pane whose
 title starts with a short non-alphanumeric glyph, because that is what Claude Code

@@ -20,8 +20,15 @@ every change and replayed at login, agents sleep and wake on their exact
 conversations, and idle ones age out instead of accumulating. That pulled the
 milestone numbering forward, so the board is **0.4** below, not 0.3.
 
-**Next: the 0.4 board** — one popup, every agent, last few lines each, built from
-`capture-pane` snapshots. Then the filter keys. Everything else below is unstarted.
+**Next: 0.3.1, trust the instrument.** Before the board, a small release that
+makes the tool's own failures visible. Everything in this roadmap assumes the
+readings are true, and right now a total blackout of agent detection reports as a
+green tick. That is a cheap fix and it gates the value of everything after it.
+
+**Then the 0.4 board** — one popup, every agent, last few lines each, built from
+`capture-pane` snapshots — with stuck-detection alongside it, since "who is
+wedged" is the question the board exists to answer. Everything else below is
+unstarted.
 
 ## The five taxes
 
@@ -39,15 +46,24 @@ Navigation — physically getting to an agent — used to be a sixth. `prefix + 
 solved it, and that's the model for the rest: the answer is usually *one keystroke
 that removes a decision*, not a bigger interface.
 
-## Where 0.2.0 lands
+**And beneath all five, tax zero: trust.** Not a cost of running many agents — a
+precondition for the other five being worth anything. Every number above is read
+from a heuristic, and a heuristic that quietly stops matching is worse than no
+number at all: you keep making decisions, on stale readings, with no signal that
+anything changed. A tool that says "3 agents idle" when it can no longer see any
+agents has not degraded, it has started lying. Paying this tax means the tool
+fails loudly or not at all.
+
+## Where 0.3.0 lands
 
 | Tax | Covered by | Gap |
 |---|---|---|
-| Routing | `prefix + j`, waiting times, waiting-first order, opt-in notifications | **Largely handled.** Next gap: nothing tells you an agent is *stuck* rather than thinking |
-| Reconstruction | Screen preview, branch + uncommitted count, seeded `CLAUDE.md` | No diff — you can see that work exists, not what it is |
-| Awareness | The picker list | One agent at a time, and only while the popup is open |
+| **0 · Trust** | The doctor checks deps, wiring, keys, hooks, shadowed names | **The weakest square on this table.** Detection itself is unverified: the doctor reports that it *ran*, never that it was *right*. 162 tests exist and nothing runs them on push |
+| Routing | `prefix + j`, waiting times, waiting-first order, opt-in notifications | Largely handled — but nothing tells you an agent is *stuck* rather than thinking, and that is the expensive half |
+| Reconstruction | Snapshot/restore, sleep/wake on exact conversations, ageing, `tarchive` | **Largely handled** on one machine. It has no concept of a second one: the snapshot stamps its hostname and nothing ever reads it back |
+| Awareness | The picker list | One agent at a time, only while the popup is open, and no way to search across agents at all |
 | Handoff | `ctrl-y` copies a path | You paste it yourself, into an agent you navigate to yourself |
-| Ceremony | `t NAME`, `ts`, folder + notes auto-created | One shape of session only; no worktrees, no multi-window profiles |
+| Ceremony | `t NAME`, `ts`, `tq`, `tf`, folder + notes auto-created | **Improved** — favorites and throwaway agents removed most of it. No worktrees, no multi-window profiles |
 
 ---
 
@@ -95,6 +111,33 @@ above depends on recording the session id first. A future feature that restarts 
 agent without doing so will silently merge conversations, and the failure looks
 like an agent that has lost its memory rather than like a bug here.
 
+## 0.3.1 — Trust the instrument
+
+*Tax zero. Small, and it gates everything after it.*
+
+Every feature in this roadmap reads from one heuristic: an agent is a pane whose
+title starts with a short non-alphanumeric glyph, because that is what Claude Code
+writes there. Status, the picker, `prefix + j`, the status line, snapshots, sleep,
+restore and ageing all stand on it. It is a good heuristic — it costs nothing and
+needs no hook — and it is entirely outside our control.
+
+The problem is not that it might break. It is that when it breaks, nothing says
+so. `ta` prints nothing, the status line reads `0/0/0`, `prefix + j` says nobody
+is waiting, and the doctor reports `✓ agent detection runs — sees 0 right now`.
+Every one of those is indistinguishable from a quiet afternoon.
+
+| Item | Why | Size |
+|---|---|---|
+| **Doctor: verify detection, don't just run it** — cross-check `_t_agent_rows` against panes whose `pane_current_command` looks like an agent CLI, and go red when an obvious agent does not classify | Converts a silent total blackout into a loud failure. The single highest-value change on this page relative to its cost | S |
+| **Doctor: assert the title contract** — name the format being relied on, and report the version of the tool that is writing it | When it does break, the message should say *what* changed, not just that nothing was found | S |
+| **CI** — `smoke.sh` + shellcheck on push (pulled forward from 1.0) | 162 checks that only run when someone remembers is most of the cost of a test suite for a fraction of the benefit. The bug classes here are exactly the kind a green tick catches: `sh` vs bash, a locale that mangles a TAB, an awk column that shifted | S |
+| **Integration tests against a throwaway server** — `tmux -L test`, fake agents, exercise restore, kill-escalation and sleep | The three code paths that can destroy work are the three with no automated coverage. `smoke.sh` never starts a server by design; this is its sibling, not its replacement | M |
+| **Say what platform this actually is** — the README claims "anything that runs in a terminal"; there are 8 `terminal-notifier`, 6 `qlmanage`, 6 `osascript`, 3 `pmset` and 2 `launchctl` call sites | Honesty is cheaper than the support burden, and it scopes the Linux work at 1.0 rather than pretending it is done | S |
+
+Deliberately *not* here: making detection more robust. Adding a second signal is a
+fix for a failure that has not happened yet. Knowing when it happens is the thing
+worth buying now, and it is a tenth of the work.
+
 ## 0.4 — See everything at once
 
 *Awareness without navigation.*
@@ -109,7 +152,8 @@ remains is the board itself and the filter keys.
 | **The board** — one popup, every agent, last few lines each | Replaces "open picker, arrow down, read, arrow down, read" with one glance. The headline feature of this release | L |
 | ~~**Context each agent is carrying**~~ — **shipped 0.2.4**, from Claude Code's transcript, attributed exactly via a hook-recorded path | "Which agent is about to compact, and which can take more work?" Unanswerable before without opening each one | M |
 | ~~**Last-activity time per agent**~~ — **shipped 0.2.1**, from `#{window_activity}`, folded into the same column as waiting time | Distinguishes "thinking" from "wedged 40 minutes ago", which the spinner cannot | S |
-| **Filter keys in the picker** (waiting only / this folder only) | Narrows five agents to the two that matter | S |
+| **Stuck, not thinking** — a distinct glyph for an agent whose context has not grown and whose pane has not changed for N minutes while it still claims to be working | The other half of routing, and the expensive half. `●` today means both "productively grinding" and "wedged since breakfast", and only one of those wants you. The inputs already exist: last-activity from `#{window_activity}`, context tokens from the transcript, both already sampled for every row. This is arithmetic on data we collect, not a new source | M |
+| **Filter keys in the picker** (waiting only / this folder only / stuck only) | Narrows five agents to the two that matter | S |
 | **"What is this agent doing to my machine?"** — ~~child processes spawned~~ (**`⚙N` shipped 0.2.1**), and whether it's writing outside its own folder | Added 2026-07-30 after an agent fanned out hundreds of `op item edit` processes across a password vault. The screen preview said "Running 1 shell command"; the only real signal was a storm of macOS permission dialogs. Status tells you an agent is *busy*, never that it's busy doing something with a blast radius | M |
 | ~~**Doctor: warn when the tmux server outlives the app that launched it**~~ — **shipped 0.2.1** | Same day: a server started from iTerm 22 hours earlier meant every macOS permission prompt named a dead app, and no amount of clicking Allow could stick. Nothing surfaced that. `#{pid}` + start time + the stale `TERM_PROGRAM` in the global env is all it takes | S |
 
@@ -118,12 +162,25 @@ layout. If it turns into a fight, that's the moment to consider a small compiled
 TUI for *that view only*, keeping everything else as shell. Deciding that early is
 cheaper than discovering it late.
 
-## 0.5 — Move work between agents
+## 0.5 — Work isn't trapped where it started
 
-*The handoff is the switch. Make it one key.*
+*The handoff is the switch. Make it one key — and stop the machine boundary being
+a handoff you cannot make at all.*
+
+Widened from "move work between agents" after 2026-09-14, when six weeks of work
+on this very repo turned out to be sitting on the other laptop, invisible from
+this one. The tool that manages your agents had no concept of the second machine
+they might be on — `tmux-agent-save.sh` has stamped `# host <name>` into every
+snapshot since the beginning, and nothing has ever read it back.
+
+Everything here stays inside the "not an orchestrator" non-goal: work lands *in an
+agent's prompt for you to press enter on*, or in a file an agent reads. Nothing
+here sends an agent instructions on your behalf.
 
 | Item | Why it cuts switching cost | Size |
 |---|---|---|
+| **See agents on your other machines** — `ta --all`, reading each host's `last.tsv` over whatever transport you already have (SSH, Tailscale, a synced directory) | The failure this is named after. Read-only and additive: the snapshot format already carries the hostname, and a remote row is just a row you cannot `enter` on. Start here | M |
+| **Search across agents** — `tgrep PATTERN` over `~/.claude/projects` transcripts, answering "which agent was the one that touched the billing schema?" | At thirty agents this has no answer today but visiting each one. The data is already on disk, already per-directory, already greppable. Arguably a precondition for handoff: you cannot hand off what you cannot find | M |
 | **Send a path to another agent** — from the file browser, pick a target agent, and it lands in that agent's prompt | Today: copy, navigate, paste, return. This is the single most common cross-agent action and it currently costs four context switches | M |
 | **Send the current selection** (copy-mode text) to an agent | Same shape, for error messages and log lines rather than paths | M |
 | **Leave a note for an agent** — append to its `CLAUDE.md` from the picker | Discovered by using it: the seeded `CLAUDE.md` turned out to be the natural channel for telling *another* agent something, because Claude Code loads it at session start. Cheaper than the send-to-prompt version and it survives the agent restarting | S |
@@ -146,8 +203,7 @@ product is usable by anyone but its author.*
 
 | Item | Why | Size |
 |---|---|---|
-| **CI** — `smoke.sh` + shellcheck on push | The bug classes here are subtle enough that a green tick matters (see the notes below) | S |
-| **Verified on Linux** | The file browser already degrades to `xdg-open`; nobody has run the suite there | M |
+| **Verified on Linux** | Pulled into focus by 0.3.1 being honest about the macOS call sites. The file browser already degrades to `xdg-open`; the notifier and Quick Look paths do not, and nobody has run the suite there | M |
 | **TPM support** (`set -g @plugin 'ryanjn/tmux-agents'`) | How the tmux world actually installs things | S |
 | **Homebrew tap** | `brew install ryanjn/tap/tmux-agents` | S |
 | **zsh completion** | The helpers work under zsh; completion doesn't | M |
@@ -168,7 +224,7 @@ Saying no is what keeps the tool small enough to trust.
   `<glyph> <task>` into its pane title is a first-class citizen, and that contract
   is documented. No per-vendor special cases.
 - **Not a rewrite.** Shell keeps it readable and hackable by the people who use
-  it. The board view in 0.3 is the one place that assumption gets tested.
+  it. The board view in 0.4 is the one place that assumption gets tested.
 
 ## Constraints that shape all of the above
 
@@ -225,6 +281,25 @@ consumes `_t_agent_display` unchanged: pane id, session, cwd, glyph, status,
 label, task, age, procs, one row per agent, tab-separated. The data layer is
 already front-end agnostic, which is what makes deferring this free.
 
+### Should these be subcommands of `t` rather than top-level words?
+
+**Answer for now: leave them.** The shell surface is eighteen words — `t ts tl tw
+tk tmv td tf tq tsave trestore tsnaps tsleep twake tarchive tpower tlifecycle
+tdoctor` — sitting in the most contested two-and-three-letter corner of the
+namespace. `ts` is moreutils' timestamp, `t` is a popular alias, and every one of
+them is a collision waiting for a machine that isn't this one. `t save`, `t sleep`
+and `t doctor` would cost one namespace entry instead of eighteen.
+
+It stays as-is because the words are *typed*, and the whole premise of the tool is
+that the distance between deciding and doing should be short. `tsave` is one token
+of muscle memory; `t save` is two and reads like a subcommand you have to remember
+the spelling of. The doctor already checks for shadowed names, which converts the
+real risk from silent breakage into a warning.
+
+**Reopen it if:** someone reports a collision that the doctor's check did not
+catch, a second tool in this space claims one of these names, or the list grows
+past roughly twenty — at which point it is a vocabulary, not a set of aliases.
+
 ## How we'll know it's working
 
 No telemetry — it's a local tool and it should stay one. Three observable proxies,
@@ -236,6 +311,11 @@ from dogfooding:
    awareness failure the board should absorb.
 3. **Whether you ever lose an agent** — forget it exists, or find it wedged an hour
    later. That's the routing tax billing you late.
+4. **Whether the tool has ever been wrong without saying so.** Not "did it break"
+   — things break. Did it report confidently while blind? Every instance is a tax
+   zero failure, and the fix is never the feature that was wrong, it is the check
+   that should have caught it. Count them; the target is zero, and it is the only
+   one of these four where the target is not "fewer".
 
 If a proposed feature can't be argued against at least one of those three, it
 probably belongs in the non-goals.

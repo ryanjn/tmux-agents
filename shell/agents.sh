@@ -998,8 +998,29 @@ _t_agent_rows() {
         *) [ -n "${_T_NOW:-}" ] && silent=$(( _T_NOW - act )) ;;
       esac
       # --- Claude Code: status is in the pane title ---
+      # What counts as an agent's glyph. Must stay identical to the rule in
+      # bin/tmux-agent-save.sh — when the two drift, the same pane is an agent
+      # to the status line and a plain shell to the snapshot, or the reverse,
+      # and neither side reports a problem. test/smoke.sh pins them together.
+      #
+      # Two conditions, and both earn their place:
+      #   - no alphanumeric in the first token. Without this, ANY title whose
+      #     first word is one letter is a "working agent": "a real fix for the
+      #     parser" and "I think so" both classified, and a pane running a
+      #     plain shell showed up in `ta` as busy.
+      #   - at most 4 BYTES. Not characters: awk counts bytes, and so does bash
+      #     outside a UTF-8 locale — which is exactly the environment launchd
+      #     hands these scripts. "✳" is three bytes there and one character
+      #     here, and a rule written in characters quietly stops matching.
       first="${title%% *}"
-      if [ "$title" != "$first" ] && [ ${#first} -eq 1 ]; then
+      _t_is_glyph=0
+      if [ "$title" != "$first" ] && [ -n "$first" ] && [ ${#first} -le 4 ]; then
+        case "$first" in
+          *[[:alnum:]]*) ;;
+          *) _t_is_glyph=1 ;;
+        esac
+      fi
+      if [ "$_t_is_glyph" = 1 ]; then
         case "$first" in
           "✳")
             if [ -f "$waitdir/${pane#%}.waiting" ]; then

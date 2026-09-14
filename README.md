@@ -450,10 +450,32 @@ board view** that shows every agent at once so you stop opening the picker just 
 look, filter keys to narrow it, and then moving a file or a finding from one agent
 to another without copying it through your own hands.
 
+## Platform support
+
+The *agent* can be anything that runs in a terminal. The *host* is more opinionated
+than that, and it is worth being straight about which parts:
+
+| | macOS | Linux |
+|---|---|---|
+| Sessions, `prefix + a`, `prefix + j`, status line, file browser | ✅ | ✅ |
+| Save / restore / sleep / wake / ageing | ✅ | ✅ |
+| Favorites, throwaway agents, the doctor | ✅ | ✅ |
+| Copy to clipboard | `pbcopy` | OSC 52, needs a terminal that supports it |
+| Desktop notifications | `terminal-notifier` / `osascript` | `notify-send` |
+| Open / reveal a file | `open`, Finder | `xdg-open`, no reveal |
+| Quick Look preview (`ctrl-l`) | ✅ | ✗ no equivalent |
+| Battery guard (`tpower`) | `pmset` | ✗ not implemented |
+| Background jobs (`--with-launchd`) | launchd | ✗ use systemd timers or cron |
+
+The core is portable. What is macOS-bound is notifications, Quick Look,
+reveal-in-Finder, the battery guard and the launchd jobs. Nobody has yet run the
+full suite on Linux — see the 1.0 section of [ROADMAP.md](ROADMAP.md).
+
 ## Contributing
 
 ```bash
 ./test/smoke.sh              # syntax, portability traps, install/uninstall round-trip
+./test/integration.sh        # a real tmux server on its own socket: restore, sleep, kills
 ./bin/tmux-agents-doctor.sh  # check a live install
 ```
 

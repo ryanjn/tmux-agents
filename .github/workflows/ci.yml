@@ -32,3 +32,9 @@ jobs:
 
       - name: smoke
         run: bash test/smoke.sh
+
+      # Drives a real server on its own socket. Safe in CI for the same reason
+      # it is safe locally: every call is socketed, and the run fails if the
+      # default server's session list changed.
+      - name: integration
+        run: bash test/integration.sh

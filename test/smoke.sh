@@ -369,6 +369,41 @@ check "tsnaps -l reads is_agent at 15, not an older position" \
 check "trestore reads the snapshot by name, in writer order" \
   "grep -q 'read -r tag session widx wname wactive wlayout pidx pactive cwd cmd title paneid optsid opttask isagent task sid' '$ROOT/bin/tmux-agent-restore.sh'"
 
+# "Is this pane an agent?" is answered in two places — shell/agents.sh for
+# everything live, bin/tmux-agent-save.sh for the snapshot. They drifted: one
+# accepted any single-character first token, the other required a
+# non-alphanumeric one, so a pane could be a working agent to the status line
+# and a plain shell to the snapshot with neither side reporting anything.
+glyph_agents() { # the rule as shell/agents.sh applies it
+  local t="$1" first="${1%% *}" g=0
+  if [ "$t" != "$first" ] && [ -n "$first" ] && [ ${#first} -le 4 ]; then
+    case "$first" in *[[:alnum:]]*) ;; *) g=1 ;; esac
+  fi
+  printf '%s' "$g"
+}
+glyph_save() {   # the rule as bin/tmux-agent-save.sh applies it
+  printf '%s' "$1" | awk '{n=split($0,w," "); print (n>1 && w[1] !~ /[[:alnum:]]/ && length(w[1])<=4) ? 1 : 0}'
+}
+while IFS='|' read -r title want; do
+  [ -n "$title" ] || continue
+  # ${title} braced: a multibyte character immediately after $title gets
+  # absorbed into the variable name in some locales, and the loop dies with
+  # "unbound variable" on a name you never wrote.
+  check "detection: «${title}» -> ${want}, and both sides agree" \
+    "[ \"\$(glyph_agents '$title')\" = '$want' ] && [ \"\$(glyph_save '$title')\" = '$want' ]"
+done <<'TITLES'
+✳ writing the parser|1
+◆ needs an answer|1
+⠋ spinning up|1
+a real fix for the parser|0
+I think so|0
+no glyph here|0
+plain-shell-title|0
+TITLES
+
+check "the live classifier still requires a space after the glyph" \
+  "[ \"\$(glyph_agents '✳')\" = 0 ]"
+
 check "launchd plists are templates, not one person's paths" \
   "grep -q '@TMUX_AGENTS_HOME@' '$ROOT/macos/com.tmux-agents.persist.plist.in' && ! grep -rq '/Users/' '$ROOT/macos'"
 check "--with-launchd --dry-run renders without loading anything" \

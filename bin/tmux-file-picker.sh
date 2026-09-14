@@ -31,6 +31,9 @@ set -u
 # Absolute, because fzf runs --preview and reload() as fresh child processes and a
 # relative $0 would resolve against whatever directory they inherit.
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# Shared palette, so the file browser and the agent picker are visibly one tool.
+# shellcheck disable=SC1090
+[ -r "$(dirname "$SELF")/tmux-ui.sh" ] && . "$(dirname "$SELF")/tmux-ui.sh"
 
 # ---------------------------------------------------------------------------
 # Listing
@@ -265,6 +268,7 @@ while :; do
 $hint" \
       --prompt='file> ' \
       --query "$QUERY" \
+      --color "$(ui_fzf_colors 2>/dev/null)" \
       --reverse --cycle --height=100% \
       --bind "ctrl-r:reload($SELF --list)"
   )

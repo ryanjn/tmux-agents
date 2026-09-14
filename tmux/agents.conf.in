@@ -46,6 +46,64 @@ bind j run-shell "@TMUX_AGENTS_HOME@/bin/tmux-agent-next.sh '#{client_tty}'"
 bind f run-shell "@TMUX_AGENTS_HOME@/bin/tmux-file-pick.sh '#{pane_id}' '#{client_tty}'"
 
 # ---------------------------------------------------------------------------
+# prefix + F — favorites
+# ---------------------------------------------------------------------------
+# The short list kept by `tf`. Enter starts one, or switches to it if it is
+# already running. Same client rule as the picker.
+bind F run-shell "@TMUX_AGENTS_HOME@/bin/tmux-favorites-pick.sh '#{client_tty}'"
+
+# ---------------------------------------------------------------------------
+# prefix + A — a second agent beside this one
+# ---------------------------------------------------------------------------
+# Split this window and start an agent in the new pane, on the same folder.
+# Press it repeatedly to watch three or four work at once; the window re-tiles
+# each time, and each pane's border carries that agent's own status and task.
+#
+# Capital A because prefix + a is the picker and these belong together: `a`
+# finds an agent that exists, `A` makes one here.
+#
+# Claude Code wants ~80 columns, so this stops being readable past
+# window_width/80 panes — it warns rather than refusing, and prefix + z zooms
+# one pane full-screen when you want to actually read it.
+bind A run-shell "@TMUX_AGENTS_HOME@/bin/tmux-agent-do.sh split '#{pane_id}'"
+
+# ---------------------------------------------------------------------------
+# prefix + R — restart the agent in this pane, in place
+# ---------------------------------------------------------------------------
+# Exit the process and relaunch it on its own exact conversation
+# (`claude -r <session-id>`, never --continue, which would resume whichever
+# conversation in that DIRECTORY spoke last). This is the one-keystroke fix for
+# stale macOS permissions and for picking up MCP/config changes. Works on a dead
+# agent too — a pane sitting at its shell prompt just gets the resume command.
+#
+# Capital R because lowercase r is the config reload. -b is load-bearing: the
+# restart waits up to 8s for the process to exit, and a foreground run-shell
+# blocks the entire tmux server for that long.
+bind R run-shell -b "@TMUX_AGENTS_HOME@/bin/tmux-agent-do.sh restart '#{pane_id}'"
+
+# ---------------------------------------------------------------------------
+# prefix + S — put this pane's agent to sleep
+# ---------------------------------------------------------------------------
+# Exit the process, keep the conversation. The pair to prefix + R, which wakes
+# it again.
+#
+# Worth a key because the cost is real and invisible: a few dozen idle agents
+# hold gigabytes of RSS between them, and most are waiting on an answer that is
+# not coming today. Sleeping is only safe because the session id is recorded
+# first — waking with `claude --continue` would resume the most recent
+# conversation in the DIRECTORY, so agents that share a folder would quietly
+# come back as each other.
+bind S run-shell -b "@TMUX_AGENTS_HOME@/bin/tmux-agent-do.sh sleep '#{pane_id}'"
+
+# ---------------------------------------------------------------------------
+# prefix + B — send this pane's agent back home
+# ---------------------------------------------------------------------------
+# The undo for pulling an agent in (prefix + a, then ctrl-g). Breaks this pane
+# back out into the session it came from, or into its own window here if that
+# session has since died. `B` beside `A` because they are a pair.
+bind B run-shell "@TMUX_AGENTS_HOME@/bin/tmux-agent-do.sh home '#{pane_id}'"
+
+# ---------------------------------------------------------------------------
 # Load-bearing settings
 # ---------------------------------------------------------------------------
 # Claude Code renames its window to its own version string ("2.1.220"), which
@@ -57,6 +115,38 @@ bind f run-shell "@TMUX_AGENTS_HOME@/bin/tmux-file-pick.sh '#{pane_id}' '#{clien
 # tracks Claude Code's "<glyph> <task>" live. Only window_name is frozen.
 set -g allow-rename off
 setw -g automatic-rename off
+
+# "all", not "on". Desktop notifications ride this: tmux-agent-notify.sh writes
+# OSC 777 into the waiting agent's pane for the terminal to show, and the agent
+# that needs you is by definition in a window you are NOT looking at. "on"
+# forwards only from the visible pane, which silently drops exactly those.
+set -g allow-passthrough all
+
+# ---------------------------------------------------------------------------
+# Snapshot the server's shape whenever it changes
+# ---------------------------------------------------------------------------
+# Not just on the 5-minute clock, so a power cut loses seconds of arrangement
+# rather than minutes. Each hook fires tmux-agent-autosave.sh, which coalesces
+# bursts and refuses to run mid-restore. Index 51 is used throughout to leave
+# the lower indexes free for hooks you already have. Always -b: a hook that
+# blocks holds the whole server for as long as it runs.
+#
+# tmux files pane-exited under the window hooks (show-hooks -gw), the other nine
+# under -g — so a global count of nine is complete, not one short.
+set-hook -g session-created[51] "run-shell -b '@TMUX_AGENTS_HOME@/bin/tmux-agent-autosave.sh'"
+set-hook -g session-closed[51] "run-shell -b '@TMUX_AGENTS_HOME@/bin/tmux-agent-autosave.sh'"
+set-hook -g session-renamed[51] "run-shell -b '@TMUX_AGENTS_HOME@/bin/tmux-agent-autosave.sh'"
+set-hook -g window-linked[51] "run-shell -b '@TMUX_AGENTS_HOME@/bin/tmux-agent-autosave.sh'"
+set-hook -g window-unlinked[51] "run-shell -b '@TMUX_AGENTS_HOME@/bin/tmux-agent-autosave.sh'"
+set-hook -g after-rename-window[51] "run-shell -b '@TMUX_AGENTS_HOME@/bin/tmux-agent-autosave.sh'"
+set-hook -g after-split-window[51] "run-shell -b '@TMUX_AGENTS_HOME@/bin/tmux-agent-autosave.sh'"
+set-hook -g after-kill-pane[51] "run-shell -b '@TMUX_AGENTS_HOME@/bin/tmux-agent-autosave.sh'"
+set-hook -g pane-exited[51] "run-shell -b '@TMUX_AGENTS_HOME@/bin/tmux-agent-autosave.sh'"
+set-hook -g after-select-layout[51] "run-shell -b '@TMUX_AGENTS_HOME@/bin/tmux-agent-autosave.sh'"
+
+# Desktop notification when an agent starts waiting on you. Read at fire time,
+# so `tmux set -g @agent-notify 0` silences it immediately, no reload needed.
+set -g @agent-notify 1
 
 # ---------------------------------------------------------------------------
 # Status line counts — ●working ○idle ◆waiting-on-you

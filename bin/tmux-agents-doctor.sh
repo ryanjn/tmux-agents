@@ -7,7 +7,6 @@
 set -u
 
 HOME_DIR="${TMUX_AGENTS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tmux-agents"
 FAILED=0
 
 if [ -t 1 ]; then
@@ -53,34 +52,60 @@ esac
 
 # ---------------------------------------------------------------------------
 head_ "Files"
+# ⚠️  This list once named a bin/ directory, shell/agents.sh and an install.sh
+# that this repo never had — it was written for a packaged layout and never
+# updated, so the doctor reported 13 missing files from its first commit until
+# 2026-09-08. Keep it in step with bin/ and shell/ as they actually are.
 for f in bin/tmux-agent-pick.sh bin/tmux-agent-picker.sh bin/tmux-agent-menu.sh \
          bin/tmux-agent-do.sh bin/tmux-agent-status.sh bin/tmux-file-pick.sh \
          bin/tmux-file-picker.sh bin/tmux-agent-next.sh bin/tmux-agent-notify.sh \
-         bin/tmux-dialog.sh shell/agents.sh; do
+         bin/tmux-dialog.sh bin/tmux-agent-cli.sh \
+         bin/tmux-agent-save.sh bin/tmux-agent-restore.sh bin/tmux-agent-persist.sh \
+         bin/tmux-agent-lifecycle.sh bin/tmux-agent-autosave.sh bin/tmux-agent-power.sh \
+         hooks/claude-status-hook.sh bin/quick-agent-reap.sh \
+         bin/tmux-favorites-pick.sh \
+         shell/agents.sh shell/tmux-persist.sh shell/quick-agents.sh shell/favorites.sh; do
   if [ ! -f "$HOME_DIR/$f" ]; then bad "missing $f"
-  elif [ ! -x "$HOME_DIR/$f" ] && [ "${f#bin/}" != "$f" ]; then bad "$f is not executable (run ./install.sh)"
+  elif [ ! -x "$HOME_DIR/$f" ] && [ "${f#bin/}" != "$f" ]; then bad "$f is not executable (chmod +x)"
   else ok "$f"
   fi
 done
 
-# ---------------------------------------------------------------------------
-head_ "Wiring"
-if [ -f "$CONF_DIR/agents.conf" ]; then
-  ok "rendered config at $CONF_DIR/agents.conf"
-  if grep -q "$HOME_DIR/bin" "$CONF_DIR/agents.conf"; then
-    ok "  and it points at this checkout"
-  else
-    bad "  but it points somewhere else — re-run ./install.sh from here"
+# The standalone names: symlinks into tmux-agent-cli.sh, for shells that never
+# sourced the helpers (hooks, cron, Claude Code's own `!` prefix).
+for n in tsleep twake tsnaps tsave trestore tarchive tpower tdoctor tf; do
+  if [ "$(readlink "$HOME/.local/bin/$n" 2>/dev/null)" = "$HOME_DIR/bin/tmux-agent-cli.sh" ]; then ok "~/.local/bin/$n"
+  else warn "~/.local/bin/$n is not a symlink to bin/tmux-agent-cli.sh — fix: ln -sfn $HOME_DIR/bin/tmux-agent-cli.sh ~/.local/bin/$n"
   fi
-else
-  bad "no rendered config — run ./install.sh"
+done
+if [ "$(readlink "$HOME/.local/bin/tlifecycle" 2>/dev/null)" = "$HOME_DIR/bin/tmux-agent-lifecycle.sh" ]; then ok "~/.local/bin/tlifecycle"
+else warn "~/.local/bin/tlifecycle is not a symlink to bin/tmux-agent-lifecycle.sh"
 fi
 
-if grep -rqF "tmux-agents" "$HOME/.tmux.conf" 2>/dev/null; then
-  ok "~/.tmux.conf sources it"
+# ---------------------------------------------------------------------------
+head_ "Wiring"
+# install.sh renders tmux/agents.conf.in into ~/.config/tmux-agents/agents.conf
+# and adds one source-file line to ~/.tmux.conf. Check both halves: a rendered
+# conf that nothing sources is the failure that looks fine from the outside.
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/tmux-agents/agents.conf"
+if [ ! -r "$CONF" ]; then
+  bad "$CONF is missing — fix: $HOME_DIR/install.sh"
+elif ! grep -qF "$HOME_DIR/bin" "$CONF" 2>/dev/null; then
+  bad "$CONF points somewhere other than $HOME_DIR/bin — fix: $HOME_DIR/install.sh"
+elif grep -qF "$CONF" "$HOME/.tmux.conf" 2>/dev/null; then
+  ok "~/.tmux.conf sources $CONF"
 else
-  bad "~/.tmux.conf has no tmux-agents block — run ./install.sh"
+  bad "~/.tmux.conf does not source $CONF — fix: $HOME_DIR/install.sh"
 fi
+
+# The two launchd jobs: snapshot/restore/lifecycle every 5 min, battery guard every 60s.
+for job in persist power; do
+  if launchctl print "gui/$(id -u)/com.tmux-agents.$job" >/dev/null 2>&1; then
+    ok "launchd job com.tmux-agents.$job is loaded"
+  else
+    bad "launchd job com.tmux-agents.$job is NOT loaded — fix: cp $HOME_DIR/macos/com.tmux-agents.$job.plist ~/Library/LaunchAgents/ && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.tmux-agents.$job.plist"
+  fi
+done
 
 if tmux info >/dev/null 2>&1; then
   if tmux list-keys 2>/dev/null | grep -q 'tmux-agent-pick'; then
@@ -91,7 +116,7 @@ if tmux info >/dev/null 2>&1; then
   if tmux list-keys 2>/dev/null | grep -q 'tmux-agent-next'; then
     ok "prefix + j jumps to the waiting agent"
   else
-    warn "prefix + j is not bound — re-run ./install.sh, then reload tmux"
+    warn "prefix + j is not bound — run: tmux source-file ~/.tmux.conf"
   fi
   if tmux list-keys 2>/dev/null | grep -q 'tmux-file-pick'; then
     ok "prefix + f is bound in the running server"
@@ -101,8 +126,14 @@ if tmux info >/dev/null 2>&1; then
   if tmux show -gv status-right 2>/dev/null | grep -q 'tmux-agent-status'; then
     ok "agent counts are in your status line"
   else
-    warn "no agent counts in status-right — ./install.sh --with-status, or add:"
+    warn "no agent counts in status-right — add to tmux.conf:"
     printf '      %s#(%s/bin/tmux-agent-status.sh)%s\n' "$DIM" "$HOME_DIR" "$Z"
+  fi
+  nh=$(tmux show-hooks -g 2>/dev/null | grep -c 'tmux-agent-autosave' || true)
+  if [ "${nh:-0}" -ge 9 ]; then
+    ok "snapshot-on-change hooks are set ($nh)"
+  else
+    warn "only $nh of 9 autosave hooks are set — run: tmux source-file ~/.tmux.conf"
   fi
   if tmux show -gv allow-rename 2>/dev/null | grep -q 'off'; then
     ok "allow-rename is off, so window names stay meaningful"
@@ -148,16 +179,80 @@ head_ "Shell helpers"
 # shellcheck disable=SC1090
 if [ -r "$HOME_DIR/shell/agents.sh" ] && . "$HOME_DIR/shell/agents.sh" 2>/dev/null; then
   missing=""
-  for fn in t tl ta ts tw tk _t_agent_rows _t_new_session _t_kill_agent; do
+  . "$HOME_DIR/shell/tmux-persist.sh" 2>/dev/null || warn "shell/tmux-persist.sh does not load"
+  . "$HOME_DIR/shell/quick-agents.sh" 2>/dev/null || warn "shell/quick-agents.sh does not load"
+  . "$HOME_DIR/shell/favorites.sh" 2>/dev/null || warn "shell/favorites.sh does not load"
+  for fn in t th tl ta ts tw tk tmv tq tf tsleep twake tsnaps tsave trestore tarchive tpower tdoctor \
+            _t_agent_rows _t_new_session _t_kill_agent _t_agent_pid _t_agent_sid; do
     declare -F "$fn" >/dev/null 2>&1 || missing="$missing $fn"
   done
   if [ -n "$missing" ]; then bad "helpers loaded but these are missing:$missing"
-  else ok "all helpers load (t, tl, ta, ts, tw, tk)"
+  else ok "every command in t --help is defined"
   fi
   n=$(_t_agent_rows 2>/dev/null | wc -l | tr -d ' ')
   ok "agent detection runs — sees $n right now"
 else
   bad "shell/agents.sh does not load"
+fi
+
+# ---------------------------------------------------------------------------
+# macOS caches each process's privacy decision for that process's lifetime, so an
+# agent that started before a grant keeps seeing the old answer however many times
+# you re-toggle System Settings. It surfaces as computer-use insisting that
+# permissions are "not yet granted" when they visibly are. This is the check that
+# turns that from a 40-minute misdiagnosis into a line of output.
+#
+# It lives HERE and not in `ta` or the status line on purpose — see the note above
+# _t_tcc_mtime. TCC.db moves whenever any app's privacy setting changes, so most
+# agents are "stale" most of the time; as a permanent column it would be wallpaper.
+if [ "$(uname -s 2>/dev/null)" = "Darwin" ] && declare -F _t_tcc_stale >/dev/null 2>&1; then
+  head_ "macOS permissions (TCC)"
+  tccm=$(_t_tcc_mtime)
+  if [ -z "$tccm" ]; then
+    warn "can't read either TCC database — skipping the staleness check"
+  else
+    tccwhen=$(date -r "$tccm" '+%Y-%m-%d %H:%M' 2>/dev/null)
+    stale=$(_t_tcc_stale)
+    nstale=$(printf '%s' "$stale" | wc -w | tr -d ' ')
+    if [ "${nstale:-0}" -eq 0 ]; then
+      ok "no agent predates the last permission change ($tccwhen)"
+    else
+      warn "$nstale agent(s) started BEFORE the last permission change ($tccwhen)"
+      tmux list-panes -a -F '#{pane_pid}	#{session_name}	#{window_name}' 2>/dev/null |
+        while IFS=$(printf '\t') read -r ppid psess pwin; do
+          case " $stale " in
+            *" $ppid "*) printf '      %s· %s (%s)%s\n' "$DIM" "$psess" "$pwin" "$Z" ;;
+          esac
+        done
+      printf '      %sThey cannot see privacy grants made since then — macOS caches a%s\n' "$DIM" "$Z"
+      printf '      %sprocess'"'"'s TCC decision for its whole life. computer-use will report%s\n' "$DIM" "$Z"
+      printf '      %s"permission(s) not yet granted" against settings that show granted.%s\n' "$DIM" "$Z"
+      printf '      %sFix: Ctrl+b R in that window restarts claude in place and resumes the%s\n' "$DIM" "$Z"
+      printf '      %sconversation — NOT tmux kill-server, and NOT re-toggling System%s\n' "$DIM" "$Z"
+      printf '      %sSettings. Only matters for agents doing desktop automation.%s\n' "$DIM" "$Z"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# tmux parses every target as session:window.pane, so a session whose NAME holds
+# a dot cannot be addressed by name at all — `kill-session -t "=release-2.0"`
+# answers "can't find pane: 0" and the session lives on. New ones can't be made
+# any more, but any that predate the guard are worth naming here rather than
+# being found the hard way.
+if declare -F _t_session_id >/dev/null 2>&1; then
+  dotted=$(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '\.' || true)
+  if [ -n "$dotted" ]; then
+    head_ "Session names"
+    n=$(printf '%s\n' "$dotted" | grep -c .)
+    warn "$n session(s) have a '.' in the name and can't be targeted by name"
+    printf '%s\n' "$dotted" | while IFS= read -r s; do
+      [ -n "$s" ] && printf '      %s· %s%s\n' "$DIM" "$s" "$Z"
+    done
+    printf '      %sthey were made before the guard in _t_new_session. `tk NAME` and the%s\n' "$DIM" "$Z"
+    printf '      %spicker'"'"'s ctrl-x now resolve the session id first, so both work — or%s\n' "$DIM" "$Z"
+    printf '      %srename it out of the way with: tmv NEW-NAME (from inside the session)%s\n' "$DIM" "$Z"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -183,8 +278,19 @@ if [ -z "$notify_on" ]; then
   notify_how="@agent-notify"
 fi
 if [ "${notify_on:-0}" = 1 ]; then
+  osmaj=$(sw_vers -productVersion 2>/dev/null | cut -d. -f1)
   if [ -n "${TMUX_AGENT_NOTIFY_CMD:-}" ]; then
     ok "desktop notifications on ($notify_how), via \$TMUX_AGENT_NOTIFY_CMD"
+  elif tmux list-clients 2>/dev/null | grep -q ghostty; then
+    ok "desktop notifications on ($notify_how), through Ghostty (OSC 777)"
+    if [ "$(tmux show -gv allow-passthrough 2>/dev/null)" = all ]; then
+      ok "  allow-passthrough is all, so agents in other windows get through"
+    else
+      bad "  allow-passthrough is '$(tmux show -gv allow-passthrough 2>/dev/null)' — must be 'all': run tmux source-file ~/.tmux.conf"
+    fi
+    printf '      %sif nothing appears: System Settings > Notifications > Ghostty > Allow%s\n' "$DIM" "$Z"
+  elif [ "${osmaj:-0}" -ge 26 ] 2>/dev/null; then
+    warn "notifications on, but no Ghostty client attached and macOS $osmaj has dropped terminal-notifier/osascript delivery"
   elif command -v terminal-notifier >/dev/null 2>&1; then
     ok "desktop notifications on ($notify_how, terminal-notifier)"
   elif [ "$(uname -s 2>/dev/null)" = Darwin ]; then
@@ -201,11 +307,16 @@ fi
 # ---------------------------------------------------------------------------
 head_ "Name collisions"
 clash=0
-for fn in t tl ta ts tw tk td; do
+for fn in t th tl ta ts tw tk td tq tf tmv; do
   # type -aP lists only real files on $PATH, which is the whole question here.
   # Plain `type -a` would report the functions this script just sourced itself,
   # and its multi-line function bodies, as if they were collisions.
-  paths=$(type -aP "$fn" 2>/dev/null | tr '\n' ' ')
+  paths=""
+  for pth in $(type -aP "$fn" 2>/dev/null); do
+    # Our own standalone entry points are the function by another door, not a clash.
+    [ "$(readlink "$pth" 2>/dev/null)" = "$HOME_DIR/bin/tmux-agent-cli.sh" ] && continue
+    paths="$paths$pth "
+  done
   if [ -n "$paths" ]; then
     warn "$fn shadows a real command: $paths"
     clash=1
@@ -214,8 +325,8 @@ done
 if [ "$clash" = 0 ]; then
   ok "no shadowed commands"
 else
-  printf '      %sthe function wins in an interactive shell; use install.sh --no-shell%s\n' "$DIM" "$Z"
-  printf '      %sif you would rather keep the command.%s\n' "$DIM" "$Z"
+  printf '      %sthe function wins in an interactive shell; see the README for how to%s\n' "$DIM" "$Z"
+  printf '      %sload only the keybindings if you would rather keep the command.%s\n' "$DIM" "$Z"
 fi
 
 # ---------------------------------------------------------------------------

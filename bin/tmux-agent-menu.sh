@@ -3,7 +3,8 @@
 #
 # Bound to prefix + a in ~/.tmux.conf. Arrow keys move, Enter jumps to that
 # agent, Esc cancels; 1-9 jump directly. Below the list: n starts a new agent,
-# s starts one alongside the agent you're currently in, x opens a kill menu.
+# s starts one alongside the agent you're currently in, o opens a sleep menu,
+# x opens a kill menu.
 #
 # Uses tmux's built-in display-menu rather than fzf so it has zero
 # dependencies. See GHOSTTY-TMUX-README.md for the fzf version, which adds a
@@ -11,6 +12,7 @@
 #
 #   tmux-agent-menu.sh              the agent menu
 #   tmux-agent-menu.sh --kill-menu  same list, but picking one kills it
+#   tmux-agent-menu.sh --sleep-menu same list, but picking one puts it to sleep
 set -u
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,9 +20,6 @@ DO="$DIR/tmux-agent-do.sh"
 
 # Reuse the classifier from the shell helpers — one source of truth for what
 # counts as an agent and whether it's working.
-# The shell helpers hold the agent classifier and the session/kill logic, so this
-# and the picker share one definition of what an agent is. Found relative to this
-# script rather than at a fixed path: the repo has to work wherever it is cloned.
 HELPERS="${TMUX_AGENTS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/shell/agents.sh"
 if [ -r "$HELPERS" ]; then
   # shellcheck disable=SC1090
@@ -58,7 +57,7 @@ fi
 
 if [ -z "$rows" ]; then
   # Nothing to list, but starting one is still the likely intent.
-  if [ "$mode" = "--kill-menu" ]; then
+  if [ "$mode" = "--kill-menu" ] || [ "$mode" = "--sleep-menu" ]; then
     tmux display-message "no agents running"
     exit 0
   fi
@@ -82,6 +81,10 @@ while IFS=$'\t' read -r pane session cwd glyph status label task; do
   if [ "$mode" = "--kill-menu" ]; then
     # confirm-before, because this row now destroys work instead of visiting it.
     args+=( "$disp" "$key" "confirm-before -p 'kill agent in $session? (y/n)' \"run-shell \\\"$DO kill $pane\\\"\"" )
+  elif [ "$mode" = "--sleep-menu" ]; then
+    # No confirm-before: unlike kill this keeps the conversation, and the point
+    # is to make reclaiming memory cheap enough to do without thinking about it.
+    args+=( "$disp" "$key" "run-shell \"$DO sleep $pane\"" )
   else
     args+=( "$disp" "$key" "run-shell \"$DO focus $pane\"" )
   fi
@@ -92,11 +95,17 @@ if [ "$mode" = "--kill-menu" ]; then
   exit 0
 fi
 
-# A separator, then the verbs. Same three actions the fzf picker binds to
-# ctrl-n / ctrl-s / ctrl-x, so the muscle memory transfers.
+if [ "$mode" = "--sleep-menu" ]; then
+  tmux display-menu -T "#[align=centre fg=colour39,bold] Sleep agent " -x C -y C "${args[@]}"
+  exit 0
+fi
+
+# A separator, then the verbs. Same actions the fzf picker binds to
+# ctrl-n / ctrl-s / ctrl-o / ctrl-x, so the muscle memory transfers.
 args+=( "" )
 args+=( "new agent…"            "n" "command-prompt -p 'new agent name:' \"run-shell \\\"$DO new '%%'\\\"\"" )
 args+=( "agent alongside this one" "s" "run-shell \"$DO alongside $here\"" )
+args+=( "sleep an agent…"       "o" "run-shell \"$DIR/tmux-agent-menu.sh --sleep-menu\"" )
 args+=( "kill an agent…"        "x" "run-shell \"$DIR/tmux-agent-menu.sh --kill-menu\"" )
 args+=( "" )
 args+=( "list all panes (tw)"   "w" "choose-tree -Zs" )

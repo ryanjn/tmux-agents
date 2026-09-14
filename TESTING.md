@@ -116,13 +116,24 @@ testing it with a stub will appear to do nothing while the real binary runs.
 ## The fast checks
 
 ```bash
-./test/smoke.sh              # ~100 checks, no tmux server, no GUI, safe in CI
+./test/smoke.sh              # ~150 checks, no tmux server, no GUI, safe in CI
 ./bin/tmux-agents-doctor.sh  # checks a live install
 ```
 
 `smoke.sh` stubs `_t_agent_rows` in a subshell to test sorting, ages and process
 counts without needing real agents waiting — that pattern is worth reusing for
 anything new that consumes rows.
+
+Everything that writes runs against a throwaway `HOME`, and the suite asserts it
+leaves this repo's own working tree untouched. Two traps found the hard way:
+
+- **`> symlink` writes *through* the link.** A test that dropped a decoy file over
+  an installed command symlink overwrote the real script in `bin/`. `rm -f` the
+  link first, then create the file.
+- **The `sh` rule applies to `shell/agents.sh` only.** `run-shell` sources that one
+  under `sh`, so process substitution there is fatal. The other three shell files
+  are sourced exclusively by bash scripts and may use it — a blanket ban across
+  `shell/*.sh` produces false failures.
 
 ## Things that are true and cost time to learn
 

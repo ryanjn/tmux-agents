@@ -22,12 +22,14 @@ working=0
 idle=0
 waiting=0
 running=0
+asleep=0
 while IFS=$'\t' read -r glyph status rest; do
   case "${status:-}" in
     working) working=$((working + 1)) ;;
     idle)    idle=$((idle + 1)) ;;
     waiting) waiting=$((waiting + 1)) ;;
     running) running=$((running + 1)) ;;   # alive, but state unknown
+    asleep)  asleep=$((asleep + 1)) ;;      # process exited, conversation kept
   esac
 done <<< "$rows"
 
@@ -37,4 +39,7 @@ out=""
 [ "$waiting" -gt 0 ] && out="$out$(printf '#[fg=colour214,bold]◆%d#[none] ' "$waiting")"
 out="$out$(printf '#[fg=colour41]●%d #[fg=colour244]○%d' "$working" "$idle")"
 [ "$running" -gt 0 ] && out="$out$(printf ' #[fg=colour109]◇%d' "$running")"
+# Dimmest of all: asleep agents cost nothing and want nothing. Worth a number
+# only so the fleet's real size stays visible once most of it is asleep.
+[ "$asleep" -gt 0 ] && out="$out$(printf ' #[fg=colour240]☾%d' "$asleep")"
 printf '%s#[default]' "$out"

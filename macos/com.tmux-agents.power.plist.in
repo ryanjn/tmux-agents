@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tmux-agents.power</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@TMUX_AGENTS_HOME@/bin/tmux-agent-power.sh</string>
+  </array>
+  <!-- Every minute, because at 2% this machine reports "4 minutes remaining".
+       The tick is one `pmset -g batt` and exits unless on battery and low, so a
+       60s cadence costs nothing on AC. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>60</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Same reason as tmux-persist: launchd hands a job no locale, and tmux
+         mangles the TAB in a format string without UTF-8. -->
+    <key>LANG</key><string>en_US.UTF-8</string>
+    <key>LC_ALL</key><string>en_US.UTF-8</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardErrorPath</key>
+  <string>@HOME@/.local/state/tmux-agents/power.err</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

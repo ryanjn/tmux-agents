@@ -18,7 +18,11 @@ set -g focus-events on
 
 # Let programs pass escape sequences straight through tmux. Needed for OSC 52
 # clipboard, terminal notifications, and inline image protocols.
-set -g allow-passthrough on
+#
+# "all", not "on", and agents.conf sets the same: desktop notifications are
+# written into the pane of an agent you are NOT looking at, and "on" forwards
+# only from the visible pane. Leaving this at "on" here would quietly undo it.
+set -g allow-passthrough all
 
 # Copy to the system clipboard through the terminal via OSC 52. This is also what
 # makes the file browser's "copy path" work when pbcopy isn't available.
@@ -53,6 +57,8 @@ setw -g aggressive-resize on
 # vi keys in copy mode (prefix + [ to enter, q to leave)
 setw -g mode-keys vi
 bind -T copy-mode-vi v send -X begin-selection
+bind -T copy-mode-vi y send -X copy-pipe-and-cancel "pbcopy"
+bind -T copy-mode-vi MouseDragEnd1Pane send -X copy-pipe-and-cancel "pbcopy"
 
 # Splits and new windows inherit the current directory — so a shell you split off
 # beside an agent starts in that agent's folder.
@@ -78,6 +84,18 @@ bind r source-file ~/.tmux.conf \; display "reloaded"
 # in ~/.bashrc, uncomment this to get a non-login interactive shell instead:
 #
 # set -g default-command "${SHELL}"
+
+# ---------------------------------------------------------------------------
+# Status bar styling
+# ---------------------------------------------------------------------------
+# Pure cosmetics, and separate from the agent counts on purpose: the counts live
+# in agents.conf behind --with-status, this is just what the bar looks like.
+# The session name sits in a coloured block on the left so that two terminal
+# windows on two sessions are told apart without reading anything.
+set -g status-position bottom
+set -g status-style "bg=colour234,fg=colour250"
+set -g status-left-length 30
+set -g status-left "#[bg=colour39,fg=colour232,bold] #S #[default] "
 
 # Don't let a dead shell take the pane's output with it before you've read it.
 set -g remain-on-exit off

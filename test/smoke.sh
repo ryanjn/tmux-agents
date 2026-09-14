@@ -25,13 +25,48 @@ check(){ if eval "$2" >/dev/null 2>&1; then ok "$1"; else no "$1"; fi; }
 printf '\ntmux-agents smoke test\n\n'
 
 printf 'syntax\n'
-for f in "$ROOT"/bin/*.sh "$ROOT"/hooks/*.sh "$ROOT"/shell/agents.sh "$ROOT"/install.sh "$ROOT"/test/smoke.sh; do
+for f in "$ROOT"/bin/*.sh "$ROOT"/hooks/*.sh "$ROOT"/shell/*.sh "$ROOT"/install.sh "$ROOT"/test/smoke.sh; do
   check "bash -n $(basename "$f")" "bash -n '$f'"
 done
 check "sh -n shell/agents.sh (sourced by run-shell, which uses sh)" "sh -n '$ROOT/shell/agents.sh'"
 
+printf '\nshell helpers load together\n'
+check "all four shell files source in install order" \
+  "bash -c 'set -u; for f in agents.sh quick-agents.sh tmux-persist.sh favorites.sh; do . \"$ROOT/shell/\$f\" || exit 1; done'"
+for fn in t tl ta ts tk tmv tq tf tsave trestore tdoctor tpower; do
+  check "defines $fn" \
+    "bash -c 'for f in agents.sh quick-agents.sh tmux-persist.sh favorites.sh; do . \"$ROOT/shell/\$f\"; done; declare -F $fn >/dev/null || type $fn >/dev/null 2>&1'"
+done
+# The doctor asserts a list of function names. When a function is renamed or
+# dropped, that list is what goes stale — and it fails at the user, not here.
+check "every function the doctor expects is actually defined" \
+  "bash -c '
+    for f in agents.sh quick-agents.sh tmux-persist.sh favorites.sh; do . \"$ROOT/shell/\$f\"; done
+    miss=\"\"
+    for fn in \$(sed -n \"s/^  for fn in \\(.*\\) \\\\\\\\\$/\\1/p;s/^            \\(_t_.*\\); do\\\$/\\1/p\" \"$ROOT/bin/tmux-agents-doctor.sh\"); do
+      declare -F \"\$fn\" >/dev/null 2>&1 || miss=\"\$miss \$fn\"
+    done
+    [ -z \"\$miss\" ] || { echo \"missing:\$miss\" >&2; exit 1; }
+  '"
+
+check "_TA_BIN resolves to this clone's bin/" \
+  "bash -c '. \"$ROOT/shell/agents.sh\"; [ \"\$_TA_BIN\" = \"$ROOT/bin\" ]'"
+check "tmux-favorites-pick.sh finds favorites.sh where it looks for it" \
+  "[ -r '$ROOT/shell/favorites.sh' ] && grep -q 'shell/favorites.sh' '$ROOT/bin/tmux-favorites-pick.sh'"
+
+printf '\nnothing personal leaked\n'
+# This repo was assembled out of a personal dotfiles repo. These are the names
+# that came with it; none of them belong in a public tree.
+for word in hermes ryannorris desktop-setup prescriberpoint; do
+  check "no '$word' anywhere" \
+    "! grep -rniq '$word' '$ROOT/bin' '$ROOT/shell' '$ROOT/tmux' '$ROOT/hooks' '$ROOT/macos' '$ROOT/install.sh'"
+done
+
 printf '\nportability traps\n'
 # Comments may mention it; code may not. Strip comments before looking.
+# Only agents.sh: run-shell executes under sh, and a `<(` there is a syntax
+# error that silently truncates the file and loses every function below it. The
+# other three shell files are sourced only by bash scripts, which may use it.
 check "no process substitution in shell/agents.sh" \
   "! sed 's/#.*//' '$ROOT/shell/agents.sh' | grep -q '< *<('"
 check "no absolute paths to anyone's home" \
@@ -247,6 +282,85 @@ HOME="$TMPHOME" XDG_CONFIG_HOME="$TMPHOME/.config" \
 check "uninstall removes the tmux block" "! grep -q 'tmux-agents' '$TMPHOME/.tmux.conf'"
 check "uninstall removes the shell block" "! grep -q 'agents.sh' '$TMPHOME/.bash_profile'"
 check "uninstall leaves your own rc content alone" "grep -q 'EXISTING=1' '$TMPHOME/.bash_profile'"
+
+printf '\nthe ported surface\n'
+# Everything below arrived with the port and had no coverage before it.
+HOME="$TMPHOME" XDG_CONFIG_HOME="$TMPHOME/.config" \
+  "$ROOT/install.sh" --with-extras --rc "$TMPHOME/.bash_profile" --tmux-conf "$TMPHOME/.tmux.conf" >/dev/null 2>&1
+CONF="$TMPHOME/.config/tmux-agents/agents.conf"
+
+for key in 'bind F' 'bind A' 'bind R' 'bind S' 'bind B'; do
+  check "rendered conf has $key" "grep -q '^$key ' '$CONF'"
+done
+check "all ten autosave hooks are rendered" \
+  "[ \"\$(grep -c '^set-hook .*tmux-agent-autosave.sh' '$CONF')\" = 10 ]"
+check "notifications need passthrough 'all', and the conf sets it" \
+  "grep -q '^set -g allow-passthrough all' '$CONF'"
+check "extras does not downgrade passthrough back to 'on'" \
+  "! grep -q '^set -g allow-passthrough on' '$TMPHOME/.config/tmux-agents/extras.conf'"
+check "no placeholder survives into extras.conf" \
+  "! grep -q '@[A-Z_]*@' '$TMPHOME/.config/tmux-agents/extras.conf'"
+
+check "rc sources all four shell files" \
+  "[ \"\$(grep -c 'shell/.*\.sh' '$TMPHOME/.bash_profile')\" = 4 ]"
+check "agents.sh is sourced before the files that need _TA_BIN" \
+  "[ \"\$(grep -n 'shell/agents.sh' '$TMPHOME/.bash_profile' | cut -d: -f1 | head -1)\" -lt \"\$(grep -n 'shell/tmux-persist.sh' '$TMPHOME/.bash_profile' | cut -d: -f1 | head -1)\" ]"
+
+for n in tsave trestore tdoctor tf tlifecycle; do
+  check "installs the $n command" \
+    "[ \"\$(readlink '$TMPHOME/.local/bin/$n')\" = '$ROOT/bin/tmux-agent-cli.sh' ] || [ \"\$(readlink '$TMPHOME/.local/bin/$n')\" = '$ROOT/bin/tmux-agent-lifecycle.sh' ]"
+done
+check "--no-cli skips the command symlinks" \
+  "rm -rf '$TMPHOME/.local/bin' && HOME='$TMPHOME' XDG_CONFIG_HOME='$TMPHOME/.config' '$ROOT/install.sh' --no-cli --rc '$TMPHOME/.bash_profile' --tmux-conf '$TMPHOME/.tmux.conf' >/dev/null 2>&1 && [ ! -e '$TMPHOME/.local/bin/tsave' ]"
+
+# A real file at one of our names belongs to another tool.
+HOME="$TMPHOME" XDG_CONFIG_HOME="$TMPHOME/.config" \
+  "$ROOT/install.sh" --rc "$TMPHOME/.bash_profile" --tmux-conf "$TMPHOME/.tmux.conf" >/dev/null 2>&1
+# rm first: `>` on a symlink writes through it — into this repo's bin/.
+rm -f "$TMPHOME/.local/bin/tf"
+printf 'not ours\n' > "$TMPHOME/.local/bin/tf"
+HOME="$TMPHOME" XDG_CONFIG_HOME="$TMPHOME/.config" \
+  "$ROOT/install.sh" --rc "$TMPHOME/.bash_profile" --tmux-conf "$TMPHOME/.tmux.conf" >/dev/null 2>&1
+check "never clobbers a real file at one of our command names" \
+  "grep -q 'not ours' '$TMPHOME/.local/bin/tf'"
+rm -f "$TMPHOME/.local/bin/tf"
+
+# tmux starts a login shell; bash logins never read ~/.bashrc. Getting this
+# wrong means `t` starts an agent with the bare binary instead of your alias —
+# same word, different flags, and nothing reports it.
+LSH="$TMPHOME/lsh"
+lsh_case() { # name  bash_profile-content  expected(set|unset)
+  rm -rf "$LSH/$1"; mkdir -p "$LSH/$1/.config"
+  printf '%s\n' "$2" > "$LSH/$1/.bash_profile"
+  printf 'alias claude="claude --x"\n'  > "$LSH/$1/.bashrc"
+  : > "$LSH/$1/.tmux.conf"
+  HOME="$LSH/$1" XDG_CONFIG_HOME="$LSH/$1/.config" SHELL=/bin/bash \
+    "$ROOT/install.sh" --no-cli --rc "$LSH/$1/.bash_profile" --tmux-conf "$LSH/$1/.tmux.conf" >/dev/null 2>&1
+  if grep -qE '^set -g default-command' "$LSH/$1/.config/tmux-agents/agents.conf"; then echo set; else echo unset; fi
+}
+check "login shell that never reads .bashrc gets default-command" \
+  "[ \"\$(lsh_case unreachable '# .bashrc sources this file, not the reverse')\" = set ]"
+check ".bash_profile that sources .bashrc is left alone" \
+  "[ \"\$(lsh_case plain '. \$HOME/.bashrc')\" = unset ]"
+check "the if-then form counts as sourcing it" \
+  "[ \"\$(lsh_case ifthen 'if [ -f ~/.bashrc ]; then . ~/.bashrc; fi')\" = unset ]"
+check "a commented-out source does not count" \
+  "[ \"\$(lsh_case commented '#. ~/.bashrc')\" = set ]"
+check "a path containing a dot is not a source command" \
+  "[ \"\$(lsh_case dotpath 'export PATH=\$PATH:/opt/x.y/bin')\" = set ]"
+check "--login-shell forces tmux's default back" \
+  "rm -rf '$LSH/f1' && mkdir -p '$LSH/f1/.config' && printf '# nothing\n' > '$LSH/f1/.bash_profile' && printf 'alias c=x\n' > '$LSH/f1/.bashrc' && : > '$LSH/f1/.tmux.conf' && HOME='$LSH/f1' XDG_CONFIG_HOME='$LSH/f1/.config' SHELL=/bin/bash '$ROOT/install.sh' --no-cli --login-shell --rc '$LSH/f1/.bash_profile' --tmux-conf '$LSH/f1/.tmux.conf' >/dev/null 2>&1 && ! grep -qE '^set -g default-command' '$LSH/f1/.config/tmux-agents/agents.conf'"
+check "--no-login-shell forces it on" \
+  "rm -rf '$LSH/f2' && mkdir -p '$LSH/f2/.config' && printf '. ~/.bashrc\n' > '$LSH/f2/.bash_profile' && printf 'alias c=x\n' > '$LSH/f2/.bashrc' && : > '$LSH/f2/.tmux.conf' && HOME='$LSH/f2' XDG_CONFIG_HOME='$LSH/f2/.config' SHELL=/bin/bash '$ROOT/install.sh' --no-cli --no-login-shell --rc '$LSH/f2/.bash_profile' --tmux-conf '$LSH/f2/.tmux.conf' >/dev/null 2>&1 && grep -qE '^set -g default-command' '$LSH/f2/.config/tmux-agents/agents.conf'"
+
+check "launchd plists are templates, not one person's paths" \
+  "grep -q '@TMUX_AGENTS_HOME@' '$ROOT/macos/com.tmux-agents.persist.plist.in' && ! grep -rq '/Users/' '$ROOT/macos'"
+check "--with-launchd --dry-run renders without loading anything" \
+  "HOME='$TMPHOME' '$ROOT/install.sh' --dry-run --with-launchd --rc '$TMPHOME/.bash_profile' --tmux-conf '$TMPHOME/.tmux.conf' 2>/dev/null | grep -q 'com.tmux-agents.persist.plist'"
+
+HOME="$TMPHOME" XDG_CONFIG_HOME="$TMPHOME/.config" \
+  "$ROOT/install.sh" --uninstall --rc "$TMPHOME/.bash_profile" --tmux-conf "$TMPHOME/.tmux.conf" >/dev/null 2>&1
+check "uninstall removes the command symlinks" "[ ! -e '$TMPHOME/.local/bin/tsave' ]"
 
 printf '\n%s%d passed%s' "$G" "$PASS" "$Z"
 [ "$FAIL" -gt 0 ] && printf ', %s%d failed%s' "$R" "$FAIL" "$Z"

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tmux-agents.persist</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@TMUX_AGENTS_HOME@/bin/tmux-agent-persist.sh</string>
+  </array>
+  <!-- RunAtLoad fires at login: that is the restore. StartInterval keeps the
+       snapshot fresh after that, so a reboot loses at most 5 minutes of shape. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- launchd hands a job no locale at all, and tmux replaces the TAB in a
+         format string with "_" unless the locale is UTF-8, which corrupts every
+         snapshot it writes. Set here as well as in the scripts. -->
+    <key>LANG</key><string>en_US.UTF-8</string>
+    <key>LC_ALL</key><string>en_US.UTF-8</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>StandardErrorPath</key>
+  <string>@HOME@/.local/state/tmux-agents/persist.err</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

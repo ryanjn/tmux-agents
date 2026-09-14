@@ -48,6 +48,9 @@ case "${1:-}" in
 esac
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+UI="$(dirname "$SELF")/tmux-ui.sh"
+# shellcheck disable=SC1090
+[ -r "$UI" ] && . "$UI"
 
 MIN_WIDTH=44
 MAX_WIDTH=92
@@ -55,14 +58,25 @@ MAX_WIDTH=92
 # Single-quote for a shell command string: tmux hands the popup command to sh.
 _shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
-# _popup TITLE WIDTH HEIGHT COMMAND-STRING
+# _popup INTENT TITLE WIDTH HEIGHT COMMAND-STRING
+#
+# INTENT colours the border and the title together — red for a kill, amber for a
+# rename, green for a new agent. The point is that the box tells you what kind of
+# answer it wants before you have read it; a rename and a kill looked identical
+# before, which is a poor property for the one that cannot be undone.
+#
+# ⚠️  ui_popup_style must expand UNQUOTED — it returns several flags as one
+# string. It is generated here, not taken from anywhere a caller can reach.
 _popup() {
-  local title="$1" w="$2" h="$3" cmd="$4"
+  local intent="$1" title="$2" w="$3" h="$4" cmd="$5" style ttl
+  style=$(ui_popup_style "$intent" 2>/dev/null) || style="-b rounded"
+  ttl=$(ui_popup_title "$intent" "$title" 2>/dev/null) || ttl="$title"
+  # shellcheck disable=SC2086
   if [ -n "${TMUX_AGENT_CLIENT:-}" ]; then
     tmux display-popup -c "$TMUX_AGENT_CLIENT" -E -w "$w" -h "$h" \
-      -b rounded -T "$title" "$cmd"
+      $style -T "$ttl" "$cmd"
   else
-    tmux display-popup -E -w "$w" -h "$h" -b rounded -T "$title" "$cmd"
+    tmux display-popup -E -w "$w" -h "$h" $style -T "$ttl" "$cmd"
   fi
 }
 
@@ -77,10 +91,14 @@ _width_for() {
 case "${1:-}" in
 
   # -------------------------------------------------------------------------
+  # INTENT is optional and trails the existing arguments, so every current caller
+  # keeps working and gets the neutral accent until it asks for another.
   confirm)
     title="${2:- confirm }"
     msg="${3:-Are you sure?}"
-    _popup "$title" "$(_width_for "$msg")" 7 "$(_shq "$SELF") --render-confirm $(_shq "$msg")"
+    intent="${4:-danger}"   # a confirm is nearly always about to destroy something
+    _popup "$intent" "$title" "$(_width_for "$msg")" 7 \
+      "$(_shq "$SELF") --render-confirm $(_shq "$msg") $(_shq "$intent")"
     ;;
 
   input)
@@ -88,16 +106,21 @@ case "${1:-}" in
     prompt="${3:-Value}"
     out="${4:?input needs an output file}"
     default="${5:-}"
+    intent="${6:-edit}"
     : > "$out"
-    _popup "$title" "$(_width_for "$prompt")" 8 \
-      "$(_shq "$SELF") --render-input $(_shq "$prompt") $(_shq "$out") $(_shq "$default")"
+    _popup "$intent" "$title" "$(_width_for "$prompt")" 8 \
+      "$(_shq "$SELF") --render-input $(_shq "$prompt") $(_shq "$out") $(_shq "$default") $(_shq "$intent")"
     ;;
 
   # -------------------------------------------------------------------------
   # Rendered inside the popup. Not for calling directly.
   --render-confirm)
     msg="${2:-Are you sure?}"
-    printf '\n  %s\n\n  [y/N] ' "$msg"
+    intent="${3:-danger}"
+    # The accent again, inside the box this time, so the y/N prompt matches the
+    # border rather than sitting in default white against a red frame.
+    printf '\n  %s\n\n  %s[y/N]%s ' "$msg" \
+      "$(ui_sgr "$(ui_intent_colour "$intent")" 2>/dev/null)" "$(ui_reset 2>/dev/null)"
     # One keypress, no Enter — this is a yes/no, not a form. -s so the answer
     # doesn't echo into the box after we've already printed it ourselves.
     if ! IFS= read -rsn1 answer; then answer=""; fi
@@ -111,10 +134,13 @@ case "${1:-}" in
     prompt="${2:-Value}"
     out="${3:?}"
     default="${4:-}"
+    intent="${5:-edit}"
+    acc="$(ui_sgr "$(ui_intent_colour "$intent")" 2>/dev/null)"
+    rst="$(ui_reset 2>/dev/null)"
     if [ -n "$default" ]; then
-      printf '\n  %s\n  %s(enter for %s)%s\n\n  > ' "$prompt" "$(printf '\033[2m')" "$default" "$(printf '\033[0m')"
+      printf '\n  %s\n  %s(enter for %s)%s\n\n  %s>%s ' "$prompt" "$(printf '\033[2m')" "$default" "$(printf '\033[0m')" "$acc" "$rst"
     else
-      printf '\n  %s\n  %s(enter on its own cancels)%s\n\n  > ' "$prompt" "$(printf '\033[2m')" "$(printf '\033[0m')"
+      printf '\n  %s\n  %s(enter on its own cancels)%s\n\n  %s>%s ' "$prompt" "$(printf '\033[2m')" "$(printf '\033[0m')" "$acc" "$rst"
     fi
     # -e for line editing. NOT -i for the default: that's bash 4+, and macOS ships
     # bash 3.2, so the default is shown above and applied when the answer is empty.

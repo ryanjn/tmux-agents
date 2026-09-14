@@ -60,6 +60,10 @@ stacked on re-run, and every file it edits is backed up first.
 ./install.sh --with-status   # also put agent counts in your status line
 ./install.sh --with-extras   # also install optional tmux QoL settings
 ./install.sh --no-shell      # keybindings only, no shell functions
+./install.sh --with-launchd  # also load the snapshot and battery jobs (macOS)
+./install.sh --no-cli        # skip the ~/.local/bin command symlinks
+./install.sh --login-shell   # keep tmux's default login shell in panes
+./install.sh --no-login-shell # force a non-login interactive shell
 ./install.sh --uninstall     # remove all of it
 ```
 
@@ -69,9 +73,33 @@ Then check it:
 ./bin/tmux-agents-doctor.sh
 ```
 
-Two deliberate omissions: **your status line is left alone** unless you ask
-(`--with-status`), and the installer won't edit `~/.claude/settings.json` for you —
-see [hooks/README.md](hooks/README.md) for the one hook worth adding.
+`--with-cli` is the default: `tsave`, `tdoctor`, `tf` and the rest are shell
+functions, which `cron`, `launchd` and `ssh host tsave` cannot see, so the
+installer also drops symlinks for them in `~/.local/bin`. One script backs all of
+them — it dispatches on its own basename. A real file already sitting at one of
+those names is never overwritten.
+
+`--with-launchd` is **not** the default, because a background job that outlives
+your terminal should be something you asked for. Without it you lose the
+five-minute snapshot clock, the restore at login, and the battery guard;
+everything still works by hand via `tsave` / `trestore` / `tpower`.
+
+**If your agent is a shell alias, read this one.** tmux starts a **login** shell,
+and a bash login reads `~/.bash_profile` and *never* `~/.bashrc` (zsh: `.zprofile`,
+never `.zshrc`). So if `claude` is an alias in `~/.bashrc` — say
+`claude --dangerously-skip-permissions` — a login shell silently resolves it to
+the bare binary instead. Same word, different flags, and nothing anywhere tells
+you. `t` then starts agents that behave unlike the ones you start by hand.
+
+The installer looks rather than guesses: if it can see that your interactive file
+exists and your login file does not source it, it renders
+`set -g default-command "${SHELL}"` so panes get a non-login interactive shell.
+Override with `--login-shell` / `--no-login-shell`.
+
+Three deliberate omissions: **your status line is left alone** unless you ask
+(`--with-status`), **no background jobs** unless you ask (`--with-launchd`), and
+the installer won't edit `~/.claude/settings.json` for you — see
+[hooks/README.md](hooks/README.md) for the one hook worth adding.
 
 ## Use
 
@@ -136,6 +164,123 @@ list with your query still typed.
 No fzf? The binding falls back to a dependency-free tmux menu with the same
 actions on `n` / `s` / `x`.
 
+### More agents in this window — `prefix + A`, `prefix + B`
+
+`prefix + A` splits the current window and starts an agent in the new pane, on the
+same folder. Press it again for a third. The window re-tiles each time so they
+share it evenly, and every pane border carries that agent's own status glyph and
+task, so a window of four is still readable at a glance.
+
+Claude Code wants about 80 columns, so this stops being useful past
+`window_width / 80` panes — it says so rather than refusing, and `prefix + z`
+zooms one pane full-screen when you actually want to read it.
+
+`prefix + B` is the undo for pulling an agent in with the picker's `ctrl-g`: it
+breaks the pane back out into the session it came from, or into its own window
+here if that session has since died.
+
+Capitals because `prefix + a` is the picker and these belong with it: `a` finds an
+agent that exists, `A` makes one here, `B` sends one home.
+
+### Sleep and wake — `prefix + S`, `prefix + R`
+
+An idle agent still holds roughly 400MB. A few dozen of them is real memory spent
+on conversations that are waiting for an answer which isn't coming today.
+
+**Sleeping exits the process and keeps the conversation.** `prefix + S` sleeps the
+agent in this pane; `prefix + R` wakes it in place; `ctrl-o` in the picker does
+either, and rows for sleeping agents show `☾`. Pressing enter on a sleeping agent
+wakes it — you rarely have to think about which state it was in.
+
+```bash
+tsleep -n             # what would be slept, and how much it would free
+tsleep                # everything idle over 24h  (--idle H to change)
+tsleep NAME...        # these, whatever their idle time  (%PANE works too)
+twake NAME...         # back, each on its own exact conversation
+```
+
+> [!IMPORTANT]
+> Waking uses `claude -r <session-id>`, never `claude --continue`. `--continue`
+> resumes the most recent conversation **in that directory** — so four agents
+> sharing one folder would quietly all come back as whichever spoke last. The
+> session id is recorded *before* the process is stopped, which is the only reason
+> sleeping is safe at all.
+
+`prefix + R` is also the cure for the Claude Code failure where macOS says a
+permission is granted and the agent disagrees: restarting the process in place
+picks up the current TCC state, and MCP or config changes, without losing the
+conversation.
+
+### Ageing agents out
+
+`tlifecycle` runs hourly and is the passive version of the same idea: sleep at 48h
+idle, shut down at 7 days. `tlifecycle -n` shows what the next sweep would do.
+Nothing is destroyed — a shut-down agent's conversation is still on disk, and
+`tarchive` lists everything that aged out, with `tarchive restore NAME` to bring
+one back on its exact conversation.
+
+`tpower` is the same mechanism on a different trigger: on battery, below 10%,
+idle agents are slept rather than left to die with the machine. `tpower` shows the
+battery, the threshold and who is awake; `tpower -n` shows what it would sleep now.
+
+### Surviving a restart
+
+A tmux server is a process, and a reboot kills it along with every session. What
+can be kept is the **shape** of the server — written to disk while it runs and
+replayed afterwards. The agents' actual work was never in tmux to begin with:
+Claude Code stores each conversation under `~/.claude/projects`, keyed by working
+directory, so an agent restored into the same folder resumes with its history.
+
+```bash
+tsnaps                # snapshots on disk
+tsnaps -l             # what the newest holds — every agent and its task
+tsave                 # snapshot now
+trestore              # rebuild every session in the newest snapshot not running
+trestore --resume     # ...and start each agent, not just its shell
+trestore -n           # dry run        trestore NAME...   only these
+```
+
+Snapshots are taken on **every change** — ten tmux hooks fire a coalescing
+autosave — and, with `--with-launchd`, every five minutes as well, with a restore
+at login. A power cut costs you seconds of arrangement rather than minutes.
+
+### Favorites — `tf`, `prefix + F`
+
+The agents you start often, in `~/.config/tmux-agents/favorites.tsv`.
+
+```bash
+tf                    # pick one and start it (or switch to it if running)
+tf NAME               # start that one
+tf add [NAME]         # add one — no NAME means this session, as it stands
+tf ls / rm / edit     # the list / drop one / edit the file
+```
+
+A favorite is **defaults for a name**, not a separate launcher: its folder or repo
+and what window 1 runs. So `t NAME` and the picker honour it too, and a favorite
+you start by habit and one you start by hand land in the same place.
+
+### Throwaway agents — `tq`
+
+`t NAME` is built to be permanent: it resolves or creates a folder and seeds a
+`CLAUDE.md` so the next agent there knows what the place is. That's right for work
+you come back to and wrong for the one-question-one-answer asks, which otherwise
+leave behind a folder whose only content is the note explaining that it exists.
+
+`tq` inverts it — disposal is the default, keeping is what you ask for:
+
+```bash
+tq [NAME]             # start one in a scratch dir, nothing in ~/agent-projects
+tq done [NAME]        # end it — removes the scratch dir, or offers to keep the work
+tq keep [NEWNAME]     # promote it into a real folder
+tq ls                 # quick agents, live and orphaned
+tq gc [-n] [-y]       # sweep orphaned scratch dirs
+```
+
+Scratch dirs live under `~/.cache`, deliberately not `$TMPDIR`: macOS purges
+`$TMPDIR` on its own schedule, which would delete a running agent's working files
+out from under it. `~/.cache` survives until something here removes it, which also
+leaves `tq gc` something to find after a crash.
+
 ### The file browser — `prefix + f`
 
 Browse the folder the agent in this pane is working in — one directory at a time,
@@ -166,6 +311,16 @@ From the picker, `ctrl-f` browses **the highlighted agent's** folder — so
 | `tw` | Every pane everywhere, and what's running in it |
 | `tk NAME` | Kill a session |
 | `td` | Detach |
+| `tf` | Favorites — pick one and start it |
+| `tq` | A throwaway agent in a scratch dir |
+| `tsleep` / `twake` | Sleep idle agents, keeping their conversations / bring them back |
+| `tsave` / `trestore` / `tsnaps` | Snapshot the server's shape, replay it, list snapshots |
+| `tarchive` | Agents that aged out or stopped, and `tarchive restore NAME` |
+| `tpower` / `tlifecycle` | The battery guard / the hourly sleep-and-shutdown sweep |
+| `tdoctor` | Is all of this actually wired up? |
+
+`t --help` prints the whole surface — every command above, every keybinding, and
+every knob — on one screen.
 
 ```
 $ ta
@@ -218,6 +373,11 @@ Set these before the helpers are sourced (i.e. above the marker block in your rc
 | `TMUX_AGENT_NOTIFY_CMD` | *(auto)* | Your own notifier, called as `CMD TITLE MESSAGE`. Otherwise terminal-notifier, osascript, or notify-send |
 | `TMUX_AGENT_BUSY_PROCS` | `8` | How many processes an agent must have spawned before it's flagged `⚙N` |
 | `TMUX_AGENT_CTX_WINDOW` | *(off)* | Your context window in tokens. Set it and context shows as `73%` instead of `736k` |
+| `T_AGENT_LAYOUT` | `tiled` | Layout for windows holding several agents (`even-horizontal`, `tiled`, …, or `none` to leave it alone) |
+| `TMUX_AGENT_SLEEP_HOURS` | `48` | Idle hours before the hourly sweep sleeps an agent |
+| `TMUX_AGENT_SHUTDOWN_HOURS` | `168` | Idle hours before it shuts one down (it stays in `tarchive`) |
+| `TMUX_AGENT_BATTERY_SLEEP_PCT` | `10` | Battery percentage below which `tpower` sleeps idle agents |
+| `TMUX_AGENTS_STATE` | `~/.local/state/tmux-agents` | Snapshots, the archive, and the lifecycle log |
 
 Running more than one kind of agent? Wrap `t` — bash's dynamic scoping means the
 override applies and then disappears, and the window gets named after the tool:
@@ -285,9 +445,10 @@ yourself:
 
 [ROADMAP.md](ROADMAP.md) — the plan, organised around the five taxes of running
 several agents at once: routing, reconstruction, awareness, handoff and ceremony.
-Short version of what's next: **one key that jumps to whichever agent is waiting on
-you**, waiting times in the list, and a board view that shows every agent at once
-so you stop opening the picker just to look.
+Routing and reconstruction are largely done. Short version of what's next: **a
+board view** that shows every agent at once so you stop opening the picker just to
+look, filter keys to narrow it, and then moving a file or a finding from one agent
+to another without copying it through your own hands.
 
 ## Contributing
 

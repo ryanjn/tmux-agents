@@ -22,9 +22,14 @@
 # command, and `t` is a popular alias. Check with `type t` before sourcing, or
 # see the README for how to load only the tmux keybindings.
 
-TMUX_AGENTS_VERSION="0.2.4"
+TMUX_AGENTS_VERSION="0.3.0"
 
 command -v tmux >/dev/null 2>&1 || return 0
+
+# Where this repo lives, so the shell helpers can reach bin/. Derived from this
+# file's own path, which is what makes the clone location free.
+_TA_SHELL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_TA_BIN="${TMUX_AGENTS_HOME:-$(cd "$_TA_SHELL/.." && pwd)}/bin"
 
 # ---------------------------------------------------------------------------
 # Where a new session's working directory comes from
@@ -45,6 +50,10 @@ command -v tmux >/dev/null 2>&1 || return 0
 #   export T_AUTOSTART=
 : "${T_AUTOSTART=claude}"
 
+# Agent CLIs that set no pane title are detected by process name instead.
+# Empty by default — see TMUX_AGENT_EXTRA_PROCS in `t --help`.
+: "${TMUX_AGENT_EXTRA_PROCS:=}"
+
 # _t_workdir NAME — print the directory a new session named NAME should use,
 # creating it if it doesn't exist yet. Only ever called when a session is being
 # created, so attaching to an existing session never touches the filesystem.
@@ -63,7 +72,304 @@ _t_workdir() {
 }
 
 # ---------------------------------------------------------------------------
-# t [NAME] — attach to a session, creating it if it doesn't exist
+# Checking a repo out into a new agent's folder
+# ---------------------------------------------------------------------------
+# An empty folder is the right default — most sessions are a scratch space for
+# one question — but when the session IS a codebase, "make the folder, then go
+# clone into it" is three steps with a known trap in the middle (see the CLAUDE.md
+# note about `git clone URL .`). So a repo is accepted anywhere a session name
+# goes, and the name falls out of the repo:
+#
+#   t acme/brand-console          -> session brand-console, cloned
+#   t acme/brand-console pa-bug   -> session pa-bug, same repo
+#   t git@github.com:foo/bar.git             -> session bar
+#   t ~/Projects/brand-console               -> session brand-console, WORKTREE
+#
+# The last form is the one worth knowing about. Two agents pointed at one
+# checkout share a working tree and a HEAD, so they overwrite each other's edits
+# and fight over which branch is out. `git worktree` gives the second agent its
+# own files and its own branch against the same object store — no re-clone, and
+# nothing already vendored in .git gets fetched twice.
+#
+# Only ever into a folder that was just created empty. `_t_workdir` resolves a
+# name against $TMUX_SESSION_PATH first, so a folder with anything in it is
+# somebody's real work and is left alone.
+
+# _t_is_repo_spec SPEC — true if SPEC names a repo rather than a session.
+# A slash is the whole test: session names may not contain one (`t` rejects
+# them, and they'd turn mkdir -p into a surprise directory tree), so anything
+# with a slash was meant as a repo. URLs and bare `foo.git` cover the rest.
+_t_is_repo_spec() {
+  case "${1:-}" in
+    ''|-*)        return 1 ;;
+    *\ *)         return 1 ;;   # "notes / ideas" is a clumsy name, not a repo
+    *://*|*@*:*)  return 0 ;;   # https://…, ssh://…, git@host:owner/repo
+    *.git)        return 0 ;;
+    */*)          return 0 ;;   # owner/repo, or any path
+  esac
+  return 1
+}
+
+# _t_repo_name SPEC — the session name a repo spec implies.
+# Basename minus .git, then the same character rules a typed name gets.
+_t_repo_name() {
+  local n="${1:-}"
+  while [ "$n" != "${n%/}" ]; do n="${n%/}"; done   # trailing slash on a path
+  n="${n##*/}"
+  n="${n##*:}"                                      # git@host:repo with no owner
+  n="${n%.git}"
+  # Dots included — a repo called next.js would otherwise name a session tmux
+  # can never address again. See the guard in _t_new_session.
+  n="${n//[^A-Za-z0-9_-]/-}"
+  while [ "$n" != "${n//--/-}" ]; do n="${n//--/-}"; done
+  while [ "$n" != "${n#[-.]}" ]; do n="${n#[-.]}"; done
+  printf '%s' "$n"
+}
+
+# _t_workdir_new NAME — like _t_workdir, but always a FRESH folder under the first
+# root, never an existing one found on the path.
+#
+# ⚠️  This is the one place the two must differ. `t prescriber-point` should find
+# your real checkout in ~/Projects and use it — that is the whole point of the
+# search path. But `t acme/acme-web` must NOT: checking a repo
+# out into a folder that already holds that repo is refused, so reusing the found
+# directory turned "start an agent on this repo" into an error for every repo
+# already on disk, which is most of them. It is also the wrong thing to want —
+# what you want there is a worktree, which _t_repo_checkout now goes and finds.
+_t_workdir_new() {
+  local name="$1" dir
+  local -a roots
+  IFS=: read -ra roots <<< "$TMUX_SESSION_PATH"
+
+  dir="${roots[0]}/$name"
+  if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+    echo "t: $dir already exists and has something in it — give the session its own name: t REPO NAME" >&2
+    return 1
+  fi
+  mkdir -p "$dir" || return 1
+  printf '%s\n' "$dir"
+}
+
+# _t_repo_key SPEC — a repo identity that survives how it was written.
+# github.com/owner/repo, lowercased, for all of:
+#
+#   git@github.com:Owner/Repo.git   https://github.com/owner/repo
+#   ssh://git@github.com/owner/repo Owner/Repo
+#
+# Comparing raw URLs does not work: the same repo is a git@ URL in one checkout's
+# origin and https:// in the spec you typed, and GitHub owners are case-insensitive
+# while string equality is not.
+_t_repo_key() {
+  local u="${1:-}"
+  while [ "$u" != "${u%/}" ]; do u="${u%/}"; done
+  u="${u%.git}"
+  case "$u" in
+    *://*)  u="${u#*://}"; u="${u#*@}" ;;           # scheme, then any user@
+    *@*:*)  u="${u#*@}"; u="${u%%:*}/${u#*:}" ;;    # git@host:owner/repo
+    */*/*)  ;;                                       # already host/owner/repo
+    */*)    u="github.com/$u" ;;                     # owner/repo shorthand
+  esac
+  printf '%s' "$u" | tr '[:upper:]' '[:lower:]'
+}
+
+# _t_repo_origin DIR — DIR's origin URL, read straight out of .git/config.
+# `git remote get-url` is ~5ms of process startup and _t_repo_local_source runs
+# this over every folder on the search path — ~150 of them here. The git call is
+# kept only as the fallback for linked worktrees, whose .git is a file.
+_t_repo_origin() {
+  local url
+  url=$(sed -n '/^\[remote "origin"\]/,/^\[/s/^[[:space:]]*url[[:space:]]*=[[:space:]]*//p' \
+        "$1/.git/config" 2>/dev/null | head -1)
+  [ -n "$url" ] || url=$(git -C "$1" --no-optional-locks remote get-url origin 2>/dev/null)
+  printf '%s' "$url"
+}
+
+# _t_repo_local_source SPEC — a checkout of SPEC already on $TMUX_SESSION_PATH,
+# if there is one. Prints its toplevel.
+#
+# Worth the look: these are private repos of real size, and cloning a second copy
+# of something already on disk costs minutes and gigabytes to produce a worse
+# result than the worktree it could have had.
+_t_repo_local_source() {
+  local spec="$1" want root d top
+  local -a roots
+  want=$(_t_repo_key "$spec")
+  [ -n "$want" ] || return 1
+  IFS=: read -ra roots <<< "$TMUX_SESSION_PATH"
+
+  # Named the same as the repo, which is nearly always true — two stats instead
+  # of a sweep of every folder you own.
+  for root in "${roots[@]}"; do
+    [ -n "$root" ] || continue
+    d="$root/${want##*/}"
+    [ -d "$d" ] || continue
+    if [ "$(_t_repo_key "$(_t_repo_origin "$d")")" = "$want" ]; then
+      top=$(git -C "$d" rev-parse --show-toplevel 2>/dev/null) && [ -n "$top" ] && {
+        printf '%s' "$top"; return 0; }
+    fi
+  done
+
+  # Cloned under a different folder name. Rarer, so it pays for the sweep only
+  # when the cheap answer missed.
+  for root in "${roots[@]}"; do
+    [ -n "$root" ] && [ -d "$root" ] || continue
+    for d in "$root"/*/; do
+      d="${d%/}"
+      [ -e "$d/.git" ] || continue
+      if [ "$(_t_repo_key "$(_t_repo_origin "$d")")" = "$want" ]; then
+        top=$(git -C "$d" rev-parse --show-toplevel 2>/dev/null) && [ -n "$top" ] && {
+          printf '%s' "$top"; return 0; }
+      fi
+    done
+  done
+  return 1
+}
+
+# _t_repo_checkout SPEC DIR NAME — put SPEC's working tree in DIR
+#
+# DIR has just been made by _t_workdir, so it exists and is empty. git refuses
+# to clone into a directory that exists with anything in it, and `worktree add`
+# refuses one that exists at all — hence the rmdir before each. Both are undone
+# with mkdir on failure so the caller's dir invariant holds either way.
+#
+# ⚠️  The summary goes to STDERR, not stdout. `_t_new_session` returns the new
+# agent's pane id on stdout and every caller captures it with `$(…)` — one line
+# of chat printed there and `_t_focus` is handed "cloned owner/repo\n%168"
+# instead of a pane id, and the session is created but never jumped to. Verified:
+# it fails exactly that way. git's own progress goes to the terminal when there
+# is one, and to a log when there isn't (the picker runs this under `run-shell`,
+# which has no tty at all).
+_t_repo_checkout() {
+  local spec="$1" dir="$2" name="$3" src branch log n
+
+  command -v git >/dev/null 2>&1 || { echo "t: git is not installed" >&2; return 1; }
+
+  if [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+    echo "t: $dir already has something in it — not checking out '$spec'" >&2
+    return 1
+  fi
+
+  log="${TMPDIR:-/tmp}/t-checkout-$name.log"
+
+  # Two routes to a local source, in order of directness:
+  #   1. SPEC is itself a path to a checkout — `t ~/Projects/brand-console`
+  #   2. SPEC is a remote we already have a clone of on $TMUX_SESSION_PATH —
+  #      `t acme/acme-web` when ~/Projects/acme-web
+  #      is that repo
+  # Either way the answer is a worktree, not a clone.
+  src=$(git -C "$spec" rev-parse --show-toplevel 2>/dev/null)
+  [ -n "$src" ] || src=$(_t_repo_local_source "$spec" 2>/dev/null)
+  if [ -n "$src" ]; then
+    # ⚠️  A branch can only be checked out in ONE worktree — git refuses the
+    # second, it doesn't share it. So a name that's been used before has to get
+    # its own branch rather than reuse agent/NAME, or `t ~/Projects/x` would
+    # work exactly once per repo and fail ever after.
+    branch="agent/$name"
+    n=2
+    while git -C "$src" show-ref --verify --quiet "refs/heads/$branch"; do
+      branch="agent/$name-$n"
+      n=$((n + 1))
+    done
+
+    rmdir "$dir" 2>/dev/null
+    if git -C "$src" worktree add -b "$branch" "$dir" >"$log" 2>&1; then
+      printf 'worktree of %s on %s\n' "${src##*/}" "$branch" >&2
+      return 0
+    fi
+    mkdir -p "$dir"
+    echo "t: could not add a worktree of $src — see $log" >&2
+    return 1
+  fi
+
+  rmdir "$dir" 2>/dev/null
+  case "$spec" in
+    *://*|*@*:*|*.git)
+      git clone "$spec" "$dir" 2>&1 | tee "$log" >&2
+      ;;
+    *)
+      # owner/repo. gh knows the host, the protocol and your credentials, so
+      # private repos work without spelling any of that out here.
+      if command -v gh >/dev/null 2>&1; then
+        gh repo clone "$spec" "$dir" 2>&1 | tee "$log" >&2
+      else
+        git clone "https://github.com/$spec.git" "$dir" 2>&1 | tee "$log" >&2
+      fi
+      ;;
+  esac
+
+  # ⚠️  $? is tee's. The clone's own status is ${PIPESTATUS[0]} — checking the
+  # wrong one made every failed clone look like a success.
+  if [ "${PIPESTATUS[0]}" -ne 0 ] || [ ! -d "$dir/.git" ]; then
+    mkdir -p "$dir"
+    echo "t: could not check out '$spec' — see $log" >&2
+    return 1
+  fi
+
+  printf 'cloned %s\n' "$spec" >&2
+}
+
+# _t_favorite_defaults NAME — read NAME's favorite, if any, into the CALLER's
+# fav_dir / repo / fav_cmd (they must be declared there; bash dynamic scoping is
+# what makes this a three-line helper instead of a parser in two places). A
+# target that is a directory becomes fav_dir; anything else is a repo spec.
+_t_favorite_defaults() {
+  local row ftarget fcmd
+  row=$(_tf_resolve "$1" 2>/dev/null) || return 0
+  IFS=$'\t' read -r ftarget fcmd _ <<< "$row"
+  ftarget="${ftarget/#\~/$HOME}"
+  if [ "$ftarget" != - ] && [ -n "$ftarget" ]; then
+    if [ -d "$ftarget" ]; then fav_dir="$ftarget"; else repo="$ftarget"; fi
+  fi
+  [ "$fcmd" != - ] && [ -n "$fcmd" ] && fav_cmd="$fcmd"
+  return 0
+}
+
+# _t_name_candidates — names you could start an agent on, newest first.
+#
+# Every folder on $TMUX_SESSION_PATH that has no session running. These are
+# exactly the names `t NAME` would land IN rather than create fresh, which makes
+# them the useful completions when naming a new agent: picking one resumes work
+# in a folder that already exists, and a typo silently makes a near-duplicate.
+#
+# Three tab-separated fields: name, the root it lives under, and "git" when it's
+# a checkout.
+#
+# ⚠️  Deduplicated by name, keeping the FIRST root that has it — the same
+# precedence `_t_workdir` resolves with. Listing ~/agent-projects/foo and
+# ~/Projects/foo as two choices would imply you can pick between them; you can't,
+# the search path decides.
+#
+# `ls -dt` for the ordering: it sorts by mtime in one process, where stat'ing
+# ~270 directories from the shell would not.
+_t_name_candidates() {
+  local root d name mark running label tilde='~'
+  local -a roots
+  IFS=: read -ra roots <<< "$TMUX_SESSION_PATH"
+  running=$'\n'$(tmux list-sessions -F '#{session_name}' 2>/dev/null)$'\n'
+
+  for root in "${roots[@]}"; do
+    [ -n "$root" ] && [ -d "$root" ] || continue
+    # A variable, not \~ — a backslash in the replacement of ${var/#pat/str} is
+    # literal, so escaping the tilde to stop expansion prints it: "\~/Projects".
+    label="${root/#$HOME/$tilde}"
+    ls -dt "$root"/*/ 2>/dev/null | while IFS= read -r d; do
+      name="${d%/}"; name="${name##*/}"
+      [ -n "$name" ] || continue
+      case "$running" in *$'\n'"$name"$'\n'*) continue ;; esac
+      # A dot can never be a session name (tmux reads it as a pane index — see
+      # _t_new_session), so a folder named that way cannot host an agent under
+      # its own name. Offering it as a completion would be a trap: picking it
+      # either fails, or silently creates a differently-named folder next to it.
+      case "$name" in *.*) continue ;; esac
+      mark=""
+      [ -e "${d%/}/.git" ] && mark="git"
+      printf '%s\t%s\t%s\n' "$name" "$label" "$mark"
+    done
+  done | awk -F'\t' '!seen[$1]++'
+}
+
+# ---------------------------------------------------------------------------
+# t [NAME|REPO] [NAME] — attach to a session, creating it if it doesn't exist
 # ---------------------------------------------------------------------------
 #   t          attach to the most recent session; start "main" if there are none
 #   t pp       attach to "pp", creating it (and ~/agent-projects/pp) if needed
@@ -76,8 +382,115 @@ _t_workdir() {
 #     would happily attach you to "pp-eval" when you meant to create "pp".
 #   - Already inside tmux, it switches instead of attaching. Nesting a session
 #     inside itself is the gotcha this avoids.
+# _t_help — one screen for the whole toolkit.
+#
+# It grew past the point where remembering it was reasonable: sessions, agents,
+# sleeping, snapshots, and recovery are five different vocabularies. Grouped by
+# what you are trying to do rather than alphabetically, because the question is
+# always "how do I get back to X", never "what does tk stand for".
+_t_help() {
+  cat <<'HELP'
+tmux agents — sessions that hold Claude Code agents
+
+SESSIONS
+  t NAME               attach, creating the session and its folder if needed
+  t REPO [NAME]        same, but the folder is a checkout (owner/repo, URL, path)
+  t                    attach to the most recent session
+  tl                   list sessions      tw   every pane, and what runs in it
+  tk NAME              kill one session   tmv OLD NEW   rename one
+  td                   detach (same as Ctrl+b d)
+
+THROWAWAY AGENTS    a scratch dir, nothing left behind in ~/agent-projects
+  tq [NAME]            start one (no name: one is invented)
+  tq done [NAME]       end it — removes the scratch dir, or offers to keep the work
+  tq keep [NEWNAME]    promote it into a real ~/agent-projects folder
+  tq ls                quick agents, live and orphaned
+  tq gc [-n] [-y]      sweep orphaned scratch dirs   (-n dry run, -y no prompt)
+
+FAVORITES           the agents you start often, in ~/.config/tmux-agents/favorites.tsv
+  tf                   pick one and start it (or switch to it if running)
+  tf NAME              start that one      tf add [NAME]   add (no NAME: this session)
+  tf ls / rm / edit    the list / drop one / edit the file
+                       a favorite is defaults for a NAME — its folder or repo, and
+                       what window 1 runs — so `t NAME` and the picker honour it too
+
+AGENTS
+  ta                   every agent: live status, context used, and its task
+                       ● working  ○ idle  ◆ waiting on you  ☾ asleep  ◇ other CLI
+  ts [NAME]            a second agent beside this one, same folder
+  ts -s [NAME]         the same, but split into this window
+
+SLEEPING            an idle agent holds ~400MB; sleeping keeps the conversation
+  tsleep -n            what would be slept, and how much it would free
+  tsleep               sleep everything idle over 24h   (--idle H to change)
+  tsleep NAME...       sleep these, whatever their idle time   (%PANE works too)
+  twake NAME...        wake them, each on its own exact conversation
+  tlifecycle -n        the hourly sweep, dry run: slept at 48h idle, shut down at 7d
+                       (--sleep-hours H / --shutdown-hours H)
+  tpower               low-battery guard: battery, threshold, who is awake
+  tpower -n            what it would sleep right now (agents sleep at 10% on battery)
+
+SURVIVING A RESTART   snapshots on every change and every 5 min; rebuilt at login
+  tsnaps               snapshots on disk
+  tsnaps -l            what the newest holds — every agent and its task
+  tsave                snapshot now
+  trestore             rebuild every session in the newest snapshot that is not running
+  trestore NAME...     only these            trestore -f FILE   from an older snapshot
+  trestore --resume    ...and start every agent, not just its shell     -n dry run
+
+WHEN SOMETHING GOES MISSING
+  tarchive             sessions aged out, plus agents that are NOT RUNNING
+  tarchive restore NAME   bring one back on its exact conversation
+  claude -r            in the folder: pick from every conversation there
+  tdoctor              is all of this wired up? deps, hooks, keys, shadowed names
+
+KEYS, INSIDE TMUX
+  Ctrl+b a             agent picker — enter jumps (and wakes a sleeping one)
+                       ctrl-n new   ctrl-s clone   ctrl-v clone in a split
+                       ctrl-g pull it into this window   ctrl-t rename
+                       ctrl-o sleep/wake   ctrl-x kill   ctrl-f files   ctrl-r refresh
+  Ctrl+b j             jump to whoever has waited on you longest
+  Ctrl+b F             favorites — enter starts one
+  Ctrl+b f             the files this agent is working on — enter opens, ctrl-l Quick
+                       Look, ctrl-f Finder, ctrl-y copy path, ctrl-e $EDITOR, ctrl-a recurse
+  Ctrl+b A / B         split an agent in here / send this one back
+  Ctrl+b S / R         sleep this pane's agent / wake it in place (R also cures a
+                       "permissions not granted" that System Settings says is granted)
+  Ctrl+b | / -         split right / below      Ctrl+b c   new window — all in this folder
+  Alt+arrows           move between panes, no prefix
+  Ctrl+b z             zoom this pane full screen (toggle)
+  Ctrl+b [             scroll / copy mode, vi keys: v select, y copy (mouse drag copies too)
+  Ctrl+b w             tree of every session, window and pane
+  Ctrl+b r             reload ~/.tmux.conf
+  Ctrl+b d             detach, leaving everything running
+
+KNOBS               environment, set before the shell sources these
+  T_AUTOSTART          what window 1 of a new session runs (claude; empty = a shell)
+  TMUX_SESSION_PATH    where session folders are looked for, and made
+  TMUX_AGENT_EXTRA_PROCS   other agent CLIs to recognise by process name ("aider codex")
+  T_AGENT_LAYOUT       layout for shared windows (even-horizontal, tiled, …, none)
+  TMUX_AGENT_CTX_WINDOW    context size, if you want ta to show % rather than tokens
+  TMUX_AGENT_SLEEP_HOURS / _SHUTDOWN_HOURS / _BATTERY_SLEEP_PCT      48 / 168 / 10
+  tmux set -g @agent-notify 1     desktop notification when an agent waits on you
+
+Every command takes --help. Full notes, and why each works the way it does:
+  the README at https://github.com/ryanjn/tmux-agents
+HELP
+}
+
+
 t() {
-  local session="$1"
+  case "${1:-}" in -h|--help) _t_help; return 0 ;; esac
+  local session="${1:-}" repo=""
+
+  # A repo where a name goes. Checked before anything else, because the slash
+  # that identifies a repo is the same character the name rules below reject.
+  if _t_is_repo_spec "$session"; then
+    repo="$session"
+    session=$(_t_repo_name "${2:-$repo}")
+    [ -n "$session" ] || {
+      echo "t: could not work out a session name for '$repo'" >&2; return 2; }
+  fi
 
   if [ -z "$session" ]; then
     if tmux has-session 2>/dev/null; then
@@ -98,8 +511,20 @@ t() {
   esac
 
   if ! tmux has-session -t "=$session" 2>/dev/null; then
-    _t_new_session "$session" >/dev/null \
+    # A favorite (shell/favorites.sh) is a set of defaults for NAME: where it
+    # starts and what window 1 runs. Applied only when creating, and only when
+    # nothing explicit was typed — `t owner/repo NAME` still means that repo.
+    local fav_dir="" fav_cmd=""
+    if [ -z "$repo" ] && declare -F _tf_resolve >/dev/null 2>&1; then
+      _t_favorite_defaults "$session"   # sets fav_dir / repo / fav_cmd in this scope
+    fi
+    if [ -n "$fav_cmd" ]; then local T_AUTOSTART="$fav_cmd"; fi
+    _t_new_session "$session" "$fav_dir" "$repo" >/dev/null \
       || { echo "t: could not create session '$session'" >&2; return 1; }
+  elif [ -n "$repo" ]; then
+    # Idempotent, same as a bare `t NAME`: an existing session wins, and the
+    # repo is ignored rather than checked out somewhere unexpected.
+    echo "t: '$session' is already running — attaching, not checking out '$repo'" >&2
   fi
 
   if [ -n "${TMUX:-}" ]; then
@@ -110,25 +535,40 @@ t() {
 }
 
 # ---------------------------------------------------------------------------
-# _t_new_session NAME [DIR] — create the session, print its agent pane's id
+# _t_new_session NAME [DIR] [REPO] — create the session, print its agent pane's id
 # ---------------------------------------------------------------------------
 # Split out of `t` so the picker's "new agent" key (Ctrl+b a, then ctrl-n)
 # builds a session that is identical to a hand-typed `t NAME` — same layout,
-# same window names, same autostart. One code path, so they can't drift.
+# same window names, same autostart. One code path, so they can't drift. REPO is
+# the third thing that has to stay identical between the two, which is why it is
+# handled here rather than in either caller.
 #
 # Detached on purpose: the caller decides whether to jump to it.
 _t_new_session() {
-  local session="$1" dir="${2:-}" win1 pane created win_id
+  local session="$1" dir="${2:-}" repo="${3:-}" win1 pane created win_id
 
+  # ⚠️  The dot is not a style rule. tmux parses every target as
+  # session:window.pane, so a session called "release-2.0" can never be addressed
+  # by name again — `kill-session -t "=release-2.0"` answers "can't find pane: 0"
+  # and the session survives. Even creating it only half works: `t` makes the
+  # session, then its own `new-window -t "=$session"` fails the same way and you
+  # get an agent with no shell window beside it, and no way to kill it from the
+  # picker. Caught here because `t` and the picker both funnel through this.
   case "$session" in
     "")   echo "t: session name can't be empty" >&2; return 2 ;;
     */*)  echo "t: session name can't contain '/'" >&2; return 2 ;;
     -*)   echo "t: session name can't start with '-'" >&2; return 2 ;;
+    *.*)  echo "t: session name can't contain '.' — tmux reads it as a pane index (try ${session//./-})" >&2
+          return 2 ;;
   esac
 
   if [ -z "$dir" ]; then
-    dir=$(_t_workdir "$session") \
-      || { echo "t: could not create a working directory for '$session'" >&2; return 1; }
+    if [ -n "$repo" ]; then
+      dir=$(_t_workdir_new "$session") || return 1
+    else
+      dir=$(_t_workdir "$session") \
+        || { echo "t: could not create a working directory for '$session'" >&2; return 1; }
+    fi
   fi
 
   # The first window runs the agent; the second is a plain shell in the same
@@ -139,6 +579,15 @@ _t_new_session() {
   win1="${T_AUTOSTART%% *}"
   win1="${win1##*/}"
   [ -n "$win1" ] || win1=shell
+
+  # Before the notes, not after: a checkout leaves the folder non-empty, which
+  # is exactly the signal _t_session_notes uses to keep its CLAUDE.md out of a
+  # real repo. Ordering these the other way round would both write the note into
+  # someone's checkout AND make `git clone` refuse the directory.
+  if [ -n "$repo" ]; then
+    _t_repo_checkout "$repo" "$dir" "$session" \
+      || { rmdir "$dir" 2>/dev/null; return 1; }
+  fi
 
   _t_session_notes "$dir" "$session" "$win1"
 
@@ -238,11 +687,30 @@ is the first thing the next agent in this folder will read.
   `ctrl-s` start a second one in this same folder, `ctrl-x` kill one
 - `ta` — every running agent and what it is working on
 
+## Putting a repo in a session
+
+A session can start on a checkout instead of an empty folder — pass a repo where
+the name goes, and the name comes from the repo:
+
+- `t owner/repo` — GitHub `owner/repo` into a new session `repo`
+- `t owner/repo bugfix` — same, session named `bugfix` instead
+- `t ~/Projects/thing` — an existing local checkout
+
+You get a **worktree** on a new branch `agent/NAME` whenever the repo is already
+on disk — whether you named a path, or named a remote that a folder on
+`$TMUX_SESSION_PATH` turns out to be a clone of. Otherwise it is cloned. The
+worktree is the good case: it costs seconds rather than minutes, and it gives
+this session its own files and its own branch, so it cannot overwrite whatever
+another agent is doing in the original checkout.
+
+The same works from the picker: type the repo instead of a name and press `ctrl-n`.
+
 ## Housekeeping
 
-Delete this file whenever it stops being useful. One gotcha if you are about to
-clone a repo in here: `git clone URL .` refuses a non-empty directory, so either
-remove this file first, or use `git init && git remote add origin URL && git pull`.
+Delete this file whenever it stops being useful. If you are cloning a repo in
+here by hand rather than with the commands above, note that `git clone URL .`
+refuses a non-empty directory: remove this file first, or use
+`git init && git remote add origin URL && git pull`.
 MD
 
   return 0
@@ -270,9 +738,12 @@ MD
 # a stray one left `_t_agent_rows` undefined, so the status line and the picker
 # both reported zero agents.
 _t_focus() {
-  local pane="$1" session win client from
+  local pane="$1" session win sid client from
   session=$(tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null)
   win=$(tmux display-message -p -t "$pane" '#{window_id}' 2>/dev/null)
+  # Same reason as _t_kill_agent: switch-client -t "=name" cannot reach a session
+  # whose name has a dot in it, so jumping to one silently failed too.
+  sid=$(tmux display-message -p -t "$pane" '#{session_id}' 2>/dev/null)
   [ -n "${session:-}" ] || { echo "no such pane: $pane" >&2; return 1; }
 
   tmux select-window -t "$win" 2>/dev/null
@@ -291,11 +762,11 @@ _t_focus() {
   fi
 
   if [ -n "$client" ]; then
-    tmux switch-client -c "$client" -t "=$session"
+    tmux switch-client -c "$client" -t "${sid:-=$session}"
   elif [ -n "${TMUX:-}" ]; then
-    tmux switch-client -t "=$session"
+    tmux switch-client -t "${sid:-=$session}"
   else
-    tmux attach -t "=$session"
+    tmux attach -t "${sid:-=$session}"
   fi
 }
 
@@ -330,6 +801,7 @@ _t_client_session() {
 # `tmv` and not `tr`: tr(1) is a command people actually use, and shadowing it
 # would be rude. See the collision warning at the top of this file.
 tmv() {
+  case "${1:-}" in -h|--help) _t_help; return 0 ;; esac
   if [ -z "${TMUX:-}" ]; then
     echo "tmv: run this from inside the session you want to rename" >&2
     return 2
@@ -348,23 +820,44 @@ tmv() {
 # path it has already written down (in its own notes, a scratch dir, a git remote)
 # would rot, and it would have no way to notice. A stale folder name is a much
 # smaller problem than a silently wrong one.
+# _t_session_id NAME — a session's id ($7) looked up by EXACT name.
+#
+# ⚠️  Matched against `list-sessions` output rather than passed to `-t`, because
+# `-t` parses its argument as session:window.pane before any matching happens.
+# A name with a dot in it therefore cannot be targeted at all — and the `=`
+# prefix does not save you, the split comes first. Everything that has to reach
+# a session BY NAME goes through here and then uses the id.
+_t_session_id() {
+  local name="$1"
+  [ -n "$name" ] || return 1
+  tmux list-sessions -F '#{session_id} #{session_name}' 2>/dev/null |
+    awk -v n="$name" '{ id = $1; sub(/^[^ ]* /, ""); if ($0 == n) { print id; exit } }'
+}
+
 _t_rename_session() {
-  local old="$1" new="$2" dir
+  local old="$1" new="$2" dir oid
 
   case "$new" in
     "")   echo "rename: new name can't be empty" >&2; return 2 ;;
     */*)  echo "rename: name can't contain '/'" >&2; return 2 ;;
     -*)   echo "rename: name can't start with '-'" >&2; return 2 ;;
+    *.*)  echo "rename: name can't contain '.' — tmux reads it as a pane index (try ${new//./-})" >&2
+          return 2 ;;
   esac
   [ "$old" = "$new" ] && return 0
 
-  if tmux has-session -t "=$new" 2>/dev/null; then
+  if [ -n "$(_t_session_id "$new")" ]; then
     echo "rename: '$new' is already a session" >&2
     return 1
   fi
 
-  dir=$(tmux list-panes -s -t "=$old" -F '#{pane_current_path}' 2>/dev/null | head -1)
-  tmux rename-session -t "=$old" "$new" || return 1
+  # By id, so renaming is the way OUT of a dotted name rather than another thing
+  # it blocks. This is the escape hatch for sessions created before the guard.
+  oid=$(_t_session_id "$old")
+  [ -n "$oid" ] || { echo "rename: no session named '$old'" >&2; return 1; }
+
+  dir=$(tmux list-panes -s -t "$oid" -F '#{pane_current_path}' 2>/dev/null | head -1)
+  tmux rename-session -t "$oid" "$new" || return 1
 
   # Only touch a CLAUDE.md we recognise as ours, and only the identity lines. An
   # agent may have rewritten the rest of that file, and it owns it.
@@ -392,6 +885,13 @@ _t_sed_inplace() {
   fi
 }
 
+# tdoctor — is all of this wired up? Runs bin/tmux-agents-doctor.sh, which
+# had no short name until now and so could not be listed in `t --help`.
+tdoctor() {
+  case "${1:-}" in -h|--help) _t_help; return 0 ;; esac
+  "$_TA_BIN/tmux-agents-doctor.sh" "$@"
+}
+
 # ---------------------------------------------------------------------------
 # tl — list sessions
 # ---------------------------------------------------------------------------
@@ -406,6 +906,7 @@ _t_sed_inplace() {
 # scrollback is the whole point. Homing the cursor and erasing forward redraws
 # the visible screen and leaves history intact.
 tl() {
+  case "${1:-}" in -h|--help) _t_help; return 0 ;; esac
   local out rc
   out=$(tmux ls -F '#{?session_attached,●,·}	#{session_name}	#{session_windows} win	#{?session_attached,attached,detached}' 2>/dev/null)
   rc=$?
@@ -433,7 +934,7 @@ tl() {
 # it doesn't depend on knowing which braille frames Claude cycles through.
 #
 # Some agent CLIs set no pane title at all. Those can be spotted by process name
-# instead: set TMUX_AGENT_EXTRA_PROCS="hermes aider" to include them. Off by
+# instead: set TMUX_AGENT_EXTRA_PROCS="aider codex" to include them. Off by
 # default — guessing at tools you don't run is how you get phantom rows.
 # One ps snapshot for the whole sweep, since this also feeds the status line
 # every 5 seconds.
@@ -479,11 +980,16 @@ _t_agent_rows() {
 
   # Claude Code renders ✳ both when it's finished and when it's sitting waiting
   # on you. Its hooks drop a marker here to tell those apart — see
-  # scripts/claude-status-hook.sh.
+  # hooks/claude-status-hook.sh.
   waitdir="$HOME/.cache/tmux-agent-status"
 
-  tmux list-panes -a -F '#{session_name}	#{pane_pid}	#{pane_id}	#{window_id}	#{window_name}	#{pane_current_path}	#{pane_title}	#{window_activity}' 2>/dev/null \
-  | while IFS=$'\t' read -r s pid pane win wname cwd title act; do
+  # ⚠️  Every optional field is defaulted to "-" by the format itself. TAB is IFS
+  # whitespace, so `read` COLLAPSES a run of tabs rather than yielding an empty
+  # field between them — one blank column and every later variable shifts left.
+  # @agent-session-id is empty on most panes, so without the guard this breaks
+  # for the majority of rows rather than the rare one.
+  tmux list-panes -a -F '#{session_name}	#{pane_pid}	#{pane_id}	#{window_id}	#{window_name}	#{pane_current_path}	#{?pane_title,#{pane_title},-}	#{window_activity}	#{pane_current_command}	#{?@agent-session-id,#{@agent-session-id},-}	#{?@agent-task,#{@agent-task},-}' 2>/dev/null \
+  | while IFS=$'\t' read -r s pid pane win wname cwd title act cmd sid atask; do
       # Seconds since this window last produced output.
       silent=""
       case "${act:-}" in
@@ -508,6 +1014,33 @@ _t_agent_rows() {
           *)   _t_row ● working "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" "" "$silent" "$pid" ;;
         esac
         continue
+      fi
+
+      # --- A SLEEPING agent: the process is gone, so there is no glyph and no
+      # title to read. Without this the agent is invisible everywhere that
+      # matters — `ta`, the picker, prefix+j, the status counts — and the only
+      # way back to it is to remember which pane it was in. With 23 asleep that
+      # is not a workflow.
+      #
+      # The @agent-session-id pane option is what says "an agent lives here",
+      # and the pane running a plain shell is what says it is not running now.
+      # Deliberately NOT a `ps` check: this feeds the status line every few
+      # seconds and must stay to one tmux call, and pane_current_command already
+      # distinguishes them for free (an awake agent reports its version string,
+      # never "bash", because Claude Code sets its own process title).
+      if [ "$sid" != "-" ]; then
+        case "${cmd##*/}" in
+          bash|zsh|sh|dash|fish|ksh)
+            [ "$atask" = "-" ] && atask=""
+            # No age column. Both durations this list can show mean "how long
+            # has it been like this", and neither is knowable here: window
+            # activity tracks the last REDRAW, so re-tiling a window makes a
+            # fortnight-old sleeper look two minutes old. The word "asleep" is
+            # the whole state; a number beside it would only ever be wrong.
+            _t_row ☾ asleep "$pane" "$win" "$s" "$wname" "$cwd" "$atask" "" "" ""
+            continue
+            ;;
+        esac
       fi
 
       # --- An agent with no title: detected by process name, so it's worth
@@ -672,6 +1205,104 @@ _t_proc_counts() {
     }'
 }
 
+# ---------------------------------------------------------------------------
+# Agents that can't see a permission change made after they started
+# ---------------------------------------------------------------------------
+# macOS caches a process's TCC (privacy) decision for that process's LIFETIME.
+# An agent that was told "no" to Accessibility or Screen Recording keeps the
+# denial even after you grant it in System Settings — it never re-reads the
+# database. So `computer-use` reports "permission(s) not yet granted" against
+# settings that visibly show granted, and re-toggling them changes nothing.
+#
+# Long-lived agent sessions are what make this bite: `t NAME` sessions run for
+# days, so any grant made in the meantime lands behind them. The fix is to
+# restart the *claude process* — not `tmux kill-server`, not System Settings.
+# Diagnosed 2026-07-30/31; the full write-up, including the four probes that
+# each give a false green, is in the macOS permissions note in the README.
+#
+# ⚠️  This is reported by `tmux-agents-doctor.sh` and in the picker's preview,
+# and deliberately NOT as a column in `ta` or the status line. TCC.db's mtime
+# moves whenever *any* app's privacy setting changes, so "started before the
+# last permission change" is true of nearly every agent nearly all the time —
+# measured 12 of 14 on the machine this was written on. A marker that is on 86%
+# of rows is not a warning, it is wallpaper. It earns its place where you have
+# gone looking for an explanation, and nowhere else.
+
+# _t_tcc_mtime — when a privacy permission was last changed, as an epoch second.
+# Empty off macOS, or if neither database can be stat'd. Both are checked and the
+# newer wins: Accessibility lives in the system database, Screen Recording in the
+# per-user one, and computer-use needs both.
+_t_tcc_mtime() {
+  local f m newest=0
+  for f in "$HOME/Library/Application Support/com.apple.TCC/TCC.db" \
+           "/Library/Application Support/com.apple.TCC/TCC.db"; do
+    m=$(stat -f %m "$f" 2>/dev/null) || continue
+    case "$m" in ''|*[!0-9]*) continue ;; esac
+    [ "$m" -gt "$newest" ] && newest="$m"
+  done
+  [ "$newest" -gt 0 ] && printf '%s' "$newest"
+  return 0
+}
+
+# _t_tcc_stale [PANE_PID …] — of the pane pids given (default: all panes), the
+# ones whose agent process started before that change. Prints them space-separated.
+#
+# ⚠️  It is the AGENT's process that has the stale decision, not the pane's. The
+# pane pid is the shell — `t` starts claude with send-keys, so claude is a child
+# of it and is minutes-to-days younger. Testing the shell would call an agent you
+# restarted ten seconds ago stale because the shell around it is three days old.
+#
+# ⚠️  `ps -o etimes=` (seconds) is a GNU extension; macOS ps rejects the keyword
+# outright. Hence `etime` and the [[DD-]HH:]MM:SS parse below — and comparing
+# elapsed-seconds against the age of the change, rather than reconstructing a
+# start date, which would mean parsing `lstart` across two date(1) dialects.
+_t_tcc_stale() {
+  local tcc now panes cutoff
+  tcc=$(_t_tcc_mtime)
+  [ -n "$tcc" ] || return 0
+  now=$(date +%s 2>/dev/null) || return 0
+  cutoff=$(( now - tcc ))
+
+  panes="$*"
+  [ -n "$panes" ] || panes=$(tmux list-panes -a -F '#{pane_pid}' 2>/dev/null | tr '\n' ' ')
+  [ -n "$panes" ] || return 0
+
+  ps -axo pid=,ppid=,etime=,comm= 2>/dev/null | awk \
+      -v panes="$panes" -v cutoff="$cutoff" -v extra="${TMUX_AGENT_EXTRA_PROCS:-}" '
+    BEGIN {
+      n = split(panes, P, /[ \t\n]+/)
+      for (i = 1; i <= n; i++) if (P[i] != "") want[P[i]] = 1
+      agent["claude"] = 1
+      n = split(extra, E, /[ ,]+/)
+      for (i = 1; i <= n; i++) if (E[i] != "") agent[E[i]] = 1
+    }
+    {
+      parent[$1] = $2
+      cmd = $4; sub(/.*\//, "", cmd)          # /usr/local/bin/claude -> claude
+      if (!(cmd in agent)) next
+      # [[DD-]HH:]MM:SS. The array is `dd`, not `d`: awk will not let a name be
+      # both an array and a scalar, and `d` is the hop counter in END.
+      n = split($3, dd, "-"); rest = (n == 2 ? dd[2] : dd[1]); days = (n == 2 ? dd[1] + 0 : 0)
+      m = split(rest, p, ":")
+      sec = (m == 3 ? p[1] * 3600 + p[2] * 60 + p[3] : p[1] * 60 + p[2]) + days * 86400
+      if (sec > cutoff) old[$1] = 1
+    }
+    END {
+      for (pid in old) {
+        # From the process itself, not its parent: an agent launched as the
+        # pane command IS the pane pid, and would never match otherwise.
+        c = pid; d = 0
+        while (c != "" && c != 1 && d < 40) {
+          if (c in want) { stale[c] = 1; break }
+          c = parent[c]; d++
+        }
+      }
+      out = ""
+      for (w in stale) out = out w " "
+      print out
+    }'
+}
+
 # _t_waited_for FILE — seconds since FILE was last written; empty if it's not
 # there. The waiting marker is written once, when the agent starts waiting, so its
 # mtime is the timestamp and there's nothing extra to record.
@@ -728,6 +1359,9 @@ _t_agent_display() {
     # One place to add a state. Anything unknown sorts last rather than vanishing.
     BEGIN {
       rank["waiting"] = 0; rank["working"] = 1; rank["idle"] = 2; rank["running"] = 3
+      # Asleep sorts below every live state: it is the one thing on the list that
+      # is definitively not waiting on you.
+      rank["asleep"] = 4
       # k, not n: n is the per-session row counter further down, and awk will not
       # let you use a name as both a scalar and an array.
       k = split(procs, P, " ")
@@ -754,10 +1388,17 @@ _t_agent_display() {
     }
 
     { g[NR]=$1; st[NR]=$2; p[NR]=$3; s[NR]=$5; wn[NR]=$6; c[NR]=$7; t[NR]=$8; a[NR]=$9
-      sil[NR]=$10; pp[NR]=$11; n[$5]++ }
+      sil[NR]=$10; pp[NR]=$11; n[$5]++
+      # Agents sharing ONE window (ts -s) all carry the same window name, so the
+      # session:window label below cannot tell them apart. Number them in the
+      # order list-panes walks the window, so "#2" is the second agent across.
+      # Second *agent*, not second pane: a shell you split off sits in the same
+      # window and is not a row here, so the numbering skips it.
+      wk[NR] = $5 SUBSEP $6; wc[wk[NR]]++; ord[NR] = wc[wk[NR]] }
     END {
       for (i = 1; i <= NR; i++) {
         label = (n[s[i]] > 1) ? s[i] ":" wn[i] : s[i]
+        if (wc[wk[i]] > 1) label = label "#" ord[i]
         if (length(label) > 30) label = substr(label, 1, 29) "…"
         r = (st[i] in rank) ? rank[st[i]] : 9
         # Waiting time for an agent that is waiting on you; silence otherwise.
@@ -775,6 +1416,7 @@ _t_agent_display() {
 }
 
 ta() {
+  case "${1:-}" in -h|--help) _t_help; return 0 ;; esac
   local out
   # "waiting 6m" rather than a separate column: it belongs with the state, and a
   # column of its own would push the task off a narrow terminal.
@@ -795,21 +1437,43 @@ ta() {
 }
 
 # ---------------------------------------------------------------------------
-# ts [NAME] — a second agent alongside this one, same folder
+# ts [-s] [NAME] — a second agent alongside this one, same folder
 # ---------------------------------------------------------------------------
-# The "I want a second Claude on this same checkout" command. A new *window* in
-# the current session rather than a split pane: two agents side by side in one
-# window is unreadable, and a window gets its own activity dot in the status
-# bar. Ctrl+b n / Ctrl+b p moves between them.
+# The "I want a second Claude on this same checkout" command.
+#
+#   ts          a new *window* — one agent per window, Ctrl+b n / Ctrl+b p
+#   ts -s       a new *pane* in this window — agents visible side by side
+#
+# ⚠️  The default used to be the only option, on the reasoning that "two agents
+# side by side in one window is unreadable". That is a claim about width, and it
+# is only true on a narrow terminal: Claude Code wants ~80 columns, so the real
+# rule is `window_width / panes >= 80`. On a full-screen Ghostty window (371
+# cols here) that is four agents before it bites, and `-s` warns when a split
+# would cross the line rather than refusing it.
+#
+# What a window still buys you, and a pane does not, is its own activity dot in
+# the status bar. `-s` compensates with pane borders that carry each agent's own
+# status glyph and task — see _t_agent_split.
 #
 # Same folder, deliberately — that's the whole point. It does not create or
 # touch anything on $TMUX_SESSION_PATH.
 ts() {
+  case "${1:-}" in -h|--help) _t_help; return 0 ;; esac
+  local split=0
+  case "${1:-}" in
+    -s|--split) split=1; shift ;;
+  esac
+
   if [ -z "${TMUX:-}" ]; then
     echo "ts: run this from inside a tmux session (or use: t NAME)" >&2
     return 2
   fi
-  _t_agent_alongside "${TMUX_PANE:-}" "${1:-}"
+
+  if [ "$split" -eq 1 ]; then
+    _t_agent_split "${TMUX_PANE:-}" "${1:-}"
+  else
+    _t_agent_alongside "${TMUX_PANE:-}" "${1:-}"
+  fi
 }
 
 # _t_agent_alongside PANE [NAME] — spawn an agent beside PANE, in PANE's cwd.
@@ -838,6 +1502,212 @@ _t_agent_alongside() {
   printf '%s\n' "$pane"
 }
 
+# _t_agent_split PANE [NAME] — spawn an agent in a new PANE beside PANE.
+# Prints the new pane's id. Focuses it too, since you asked for it.
+#
+# The pane-based sibling of _t_agent_alongside. Everything downstream already
+# works on this without a change, because _t_agent_rows sweeps `list-panes -a`
+# and keys every row on #{pane_id}: `ta`, the picker, Ctrl+b j and the notifier
+# see a split agent the moment it starts. _t_kill_agent likewise already scopes
+# a kill to the pane when its window holds others. This function only has to
+# create the pane and make the result legible.
+#
+# Legibility is the part that needs doing, and it is two settings:
+#
+#   - The layout is re-tiled on every split, so N agents share the window evenly
+#     instead of the newest one getting half of whatever you last focused. Set
+#     T_AGENT_LAYOUT (even-horizontal, main-vertical, …) if you want another, or
+#     to "none" to keep a hand-arranged layout.
+#   - Pane borders carry #{pane_title}, which is where Claude Code writes its own
+#     "<glyph> <task>" — the same string `ta` reads. So each pane is labelled with
+#     what that agent is doing, which is the thing a shared window otherwise
+#     costs you. Set per-window, not globally: windows with one agent keep their
+#     full height.
+_t_agent_split() {
+  local ref="$1" name="${2:-}" session win cwd pane panes width each layout
+
+  session=$(tmux display-message -p -t "$ref" '#{session_name}' 2>/dev/null)
+  win=$(tmux display-message -p -t "$ref" '#{window_id}' 2>/dev/null)
+  cwd=$(tmux display-message -p -t "$ref" '#{pane_current_path}' 2>/dev/null)
+  [ -n "${session:-}" ] || { echo "no such pane: $ref" >&2; return 1; }
+  [ -n "${cwd:-}" ] || cwd="$HOME"
+
+  # -h so the two-pane case is literally side by side; the re-tile below owns
+  # every case after that.
+  pane=$(tmux split-window -t "$ref" -h -c "$cwd" -P -F '#{pane_id}') || return 1
+
+  # A name is worth having even without per-pane names: it labels the whole
+  # group in the status bar, and allow-rename is off so it sticks.
+  [ -n "$name" ] && tmux rename-window -t "$win" "$name" >/dev/null 2>&1
+
+  [ -n "$T_AUTOSTART" ] && tmux send-keys -t "$pane" "$T_AUTOSTART" Enter
+
+  _t_window_tile "$win"
+  _t_focus "$pane" >/dev/null 2>&1
+  printf '%s\n' "$pane"
+}
+
+# _t_window_tile WIN — re-lay a window that holds several agents, and label them.
+#
+# Shared by every function that changes a window's pane count, so a window looks
+# the same however it got there: split into, gathered into, or broken back out of.
+#
+#   - Re-lays the window, so N agents share it evenly instead of the newest one
+#     getting half of whatever was last focused.
+#   - Turns the per-pane header on above one pane and OFF again at one, so a
+#     window that drops back to a single agent gets its row of height back.
+#
+# ⚠️  The layout is chosen, not fixed, and `tiled` is the wrong default despite
+# being the obvious one: tmux lays TWO panes out as two ROWS under `tiled`, which
+# is the opposite of the side-by-side this whole feature is for. So the same
+# 80-column rule that drives the warning drives the layout —
+#
+#   even-horizontal  while every pane still gets 80 columns  (2-4 on this screen)
+#   tiled            once they would not, because a grid buys back the width
+#
+# T_AGENT_LAYOUT overrides both; T_AGENT_LAYOUT=none keeps a hand-arranged one.
+_t_window_tile() {
+  local win="$1" layout panes width each
+
+  panes=$(tmux list-panes -t "$win" -F x 2>/dev/null | wc -l | tr -d ' ')
+  [ -n "${panes:-}" ] || return 0
+  width=$(tmux display-message -p -t "$win" '#{window_width}' 2>/dev/null)
+
+  layout="${T_AGENT_LAYOUT:-}"
+  if [ -z "$layout" ]; then
+    if [ -n "${width:-}" ] && [ "$panes" -gt 0 ] && [ $(( width / panes )) -ge 80 ]; then
+      layout=even-horizontal
+    else
+      layout=tiled
+    fi
+  fi
+  [ "$layout" = none ] || tmux select-layout -t "$win" "$layout" >/dev/null 2>&1
+
+  if [ "$panes" -le 1 ]; then
+    tmux set-window-option -t "$win" -u pane-border-status >/dev/null 2>&1
+    tmux set-window-option -t "$win" -u pane-border-format >/dev/null 2>&1
+    return 0
+  fi
+
+  # ⚠️  set-window-option, and the -t is the WINDOW. Setting pane-border-status
+  # globally puts a border line on every single-pane window on the machine —
+  # one row of height lost everywhere, to label something that needs no label.
+  tmux set-window-option -t "$win" pane-border-status top >/dev/null 2>&1
+  # Two details in one short string:
+  #   #{=60:pane_title} is the portable trim. The nicer #{=/60/…:…} form is 3.4+
+  #   and this has to keep working if tmux is ever downgraded.
+  # ⚠️  #[fg=colour39]#[bold], NOT #[fg=colour39,bold]. tmux splits #{?a,b,c} on
+  #   commas before it ever looks at the styles, so a comma inside #[…] cuts the
+  #   conditional in half and the border renders as literal "bold]" text.
+  tmux set-window-option -t "$win" pane-border-format \
+    '#{?pane_active,#[fg=colour39]#[bold],#[fg=colour244]} #{=60:pane_title} #[default]' \
+    >/dev/null 2>&1
+
+  # Warn, don't refuse. The fix (Ctrl+b z to zoom, or send one home) is one
+  # keystroke away, so blocking would cost more than it saves.
+  #
+  # Both dimensions, because the layout switch above trades one for the other:
+  # falling back to `tiled` is what keeps panes 80 columns wide past four agents,
+  # and it pays for that in rows. Checking only width would go quiet at exactly
+  # the point the window gets hard to read for the other reason.
+  #
+  # Measured off a real pane rather than width/panes — under a grid the panes are
+  # wider than that, and quoting the pessimistic number would be a lie.
+  each=$(tmux display-message -p -t "$win" '#{pane_width}' 2>/dev/null)
+  rows=$(tmux display-message -p -t "$win" '#{pane_height}' 2>/dev/null)
+  if [ -n "${each:-}" ] && [ "$each" -lt 80 ]; then
+    tmux display-message "${panes} panes, ${each} cols each — under 80, Claude Code will wrap (Ctrl+b z zooms)"
+  elif [ -n "${rows:-}" ] && [ "$rows" -lt 20 ]; then
+    tmux display-message "${panes} panes, ${rows} rows each — you'll see little more than the prompt (Ctrl+b z zooms)"
+  fi
+}
+
+# _t_agent_gather DST SRC — move the ALREADY RUNNING agent in SRC into DST's window
+#
+# The other half of _t_agent_split. That one starts something new beside you;
+# this one fetches an agent that is already working somewhere else, so you can
+# watch two long-running sessions at once without switching between them.
+#
+# `join-pane` genuinely MOVES the pane — this is not a view onto it, and there is
+# no tmux primitive that shows one pane in two places. Consequences worth knowing:
+#
+#   - The agent keeps running throughout. It is the same process, re-parented to
+#     a new window; it gets a SIGWINCH and redraws.
+#   - It leaves its old session. A `t NAME` session survives that, because it
+#     still has the `shell` window beside the agent — but the agent no longer
+#     shows under its own name in `ta`, it shows under wherever you put it. The
+#     cwd column is what still identifies it.
+#   - If the move empties the source session, tmux destroys the session.
+#
+# So the origin is recorded ON THE PANE before the move (pane options travel with
+# the pane — verified), and _t_agent_send_home puts it back.
+_t_agent_gather() {
+  local dst="$1" src="$2" dwin swin sname wname
+
+  [ -n "${dst:-}" ] && [ -n "${src:-}" ] || { echo "gather: need a source and a destination" >&2; return 2; }
+
+  dwin=$(tmux display-message -p -t "$dst" '#{window_id}' 2>/dev/null)
+  swin=$(tmux display-message -p -t "$src" '#{window_id}' 2>/dev/null)
+  [ -n "${dwin:-}" ] || { echo "gather: no such pane: $dst" >&2; return 1; }
+  [ -n "${swin:-}" ] || { echo "gather: no such pane: $src" >&2; return 1; }
+  [ "$dwin" = "$swin" ] && { echo "gather: that agent is already in this window" >&2; return 1; }
+
+  sname=$(tmux display-message -p -t "$src" '#{session_name}' 2>/dev/null)
+  wname=$(tmux display-message -p -t "$src" '#{window_name}' 2>/dev/null)
+  # -p is per-pane. Set BEFORE the move: after it, the values we want to record
+  # have already been overwritten by the destination's.
+  tmux set -p -t "$src" @agent-origin "$sname" >/dev/null 2>&1
+  tmux set -p -t "$src" @agent-origin-window "$wname" >/dev/null 2>&1
+
+  tmux join-pane -h -s "$src" -t "$dst" || return 1
+
+  _t_window_tile "$dwin"
+  # The window it came from may still hold agents — give it its layout back too,
+  # and let it drop the header row if it is down to one.
+  tmux list-panes -t "$swin" -F x >/dev/null 2>&1 && _t_window_tile "$swin"
+
+  _t_focus "$src" >/dev/null 2>&1
+  printf '%s\n' "$src"
+}
+
+# _t_agent_send_home PANE — undo a gather: break PANE back out into its own window
+#
+# Falls back rather than failing when the origin is gone, which is the common
+# case after gathering the only agent out of a session: the session died with it,
+# so there is nothing to go back to. A new window here beats an error, because
+# the alternative leaves you with a pane you cannot get out of the way.
+_t_agent_send_home() {
+  local pane="$1" origin wname win
+
+  win=$(tmux display-message -p -t "$pane" '#{window_id}' 2>/dev/null)
+  [ -n "${win:-}" ] || { echo "send home: no such pane: $pane" >&2; return 1; }
+
+  origin=$(tmux show -pv -t "$pane" @agent-origin 2>/dev/null)
+  wname=$(tmux show -pv -t "$pane" @agent-origin-window 2>/dev/null)
+  # Without -n the new window is named for its shell ("bash"), losing the name
+  # the picker and the status bar label it by.
+  [ -n "${wname:-}" ] || wname="${T_AUTOSTART%% *}"
+  wname="${wname##*/}"
+  [ -n "$wname" ] || wname=agent
+
+  # -d: stay where you are. You are pushing this away, not following it.
+  if [ -n "${origin:-}" ] && tmux has-session -t "=$origin" 2>/dev/null; then
+    tmux break-pane -d -s "$pane" -n "$wname" -t "=$origin:" || return 1
+    tmux display-message "sent back to '$origin'"
+  else
+    tmux break-pane -d -s "$pane" -n "$wname" || return 1
+    [ -n "${origin:-}" ] \
+      && tmux display-message "'$origin' is gone — broke it out here instead" \
+      || tmux display-message "moved to its own window"
+  fi
+
+  tmux set -p -t "$pane" -u @agent-origin >/dev/null 2>&1
+  tmux set -p -t "$pane" -u @agent-origin-window >/dev/null 2>&1
+
+  # The window it left may be back down to one pane, and should lose its header.
+  _t_window_tile "$win"
+}
+
 # _t_uniq_window SESSION BASE — BASE, or BASE2/BASE3/… if that name is taken.
 # Window names are how you tell siblings apart in the status bar and in the
 # picker's label, so two windows called "claude" defeats the point.
@@ -861,9 +1731,16 @@ _t_uniq_window() {
 #   the session, if this was its only agent — that's the `t NAME` case, where
 #     the leftover shell window is scaffolding, not work
 _t_kill_agent() {
-  local pane="$1" session win agents panes
+  local pane="$1" session win sid agents panes
   session=$(tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null)
   win=$(tmux display-message -p -t "$pane" '#{window_id}' 2>/dev/null)
+  # ⚠️  The session ID ($7), not the name. tmux parses every target as
+  # session:window.pane, so a name containing a dot is UNADDRESSABLE: killing
+  # "release-2.0" by name reports "can't find pane: 0" and the session lives on.
+  # The `=` exact-match prefix does not help — the split happens first. Names
+  # like that can no longer be created (see _t_new_session), but this has to stay
+  # able to remove the ones already out there, and an ID never needs escaping.
+  sid=$(tmux display-message -p -t "$pane" '#{session_id}' 2>/dev/null)
   [ -n "${session:-}" ] || { echo "no such pane: $pane" >&2; return 1; }
 
   # Least destructive first. A pane you split off beside the agent is something
@@ -879,8 +1756,180 @@ _t_kill_agent() {
   if [ "${agents:-0}" -gt 1 ]; then
     tmux kill-window -t "$win"
   else
-    tmux kill-session -t "=$session"
+    tmux kill-session -t "${sid:-=$session}"
   fi
+}
+
+# _t_agent_pid PANE — pid of the agent process running in PANE, or nothing.
+#
+# The pane pid is the shell; the agent is a descendant of it (send-keys through
+# the interactive shell — see _t_new_session). Walked rather than `pgrep -P`
+# because an alias or wrapper can put a process between the shell and the
+# agent. When the tree holds MORE than one agent process — the agent itself ran
+# `claude` inside its own Bash tool — the one nearest the pane wins: that is the
+# agent, the deeper one is its work.
+#
+# Same name set as _t_tcc_stale: "claude" plus $TMUX_AGENT_EXTRA_PROCS.
+_t_agent_pid() {
+  local pane_pid="$1"
+  [ -n "$pane_pid" ] || return 0
+  ps -axo pid=,ppid=,comm= 2>/dev/null | awk \
+      -v root="$pane_pid" -v extra="${TMUX_AGENT_EXTRA_PROCS:-}" '
+    BEGIN {
+      agent["claude"] = 1
+      n = split(extra, E, /[ ,]+/)
+      for (i = 1; i <= n; i++) if (E[i] != "") agent[E[i]] = 1
+    }
+    {
+      parent[$1] = $2
+      cmd = $3; sub(/.*\//, "", cmd)          # /usr/local/bin/claude -> claude
+      if (cmd in agent) cand[$1] = 1
+    }
+    END {
+      best = ""; bestd = 99
+      for (p in cand) {
+        c = p; d = 0
+        while (c != "" && c != 1 && d < 40) {
+          if (c == root) { if (d < bestd) { bestd = d; best = p }; break }
+          c = parent[c]; d++
+        }
+      }
+      if (best != "") print best
+    }'
+}
+
+# _t_agent_sid PANE [CWD] — the Claude Code session id of the agent in
+# PANE, or nothing if it can't be known.
+#
+# Why this exists rather than just using --continue: --continue resumes the most
+# recent conversation IN A DIRECTORY, and directories hold more than one agent —
+# ~/Projects/monorepo has four. Resuming any of them with --continue puts all
+# four back on whichever spoke last, and the other three look lost. `claude -r
+# <id>` is exact.
+#
+# Two sources, in order:
+#   1. the @agent-session-id pane option — durable, survives the agent exiting,
+#      and is what the snapshot carries across a reboot
+#   2. the transcript path the status hook already records per pane, whose
+#      basename IS the session id
+#
+# ⚠️  A marker must be validated against the pane's cwd before it is believed.
+# Markers are keyed by pane id alone and tmux pane ids restart at %0 when the
+# server does, so after a reboot a leftover marker sits on a live pane id and
+# resolves to a stranger's conversation. Claude encodes a cwd by replacing "/"
+# with "-", so the transcript's parent directory has to match.
+_t_agent_sid() {
+  local pane="$1" cwd="${2:-}" sid t enc dir
+  sid=$(tmux show-options -pqv -t "$pane" @agent-session-id 2>/dev/null)
+  [ -n "$sid" ] && { printf '%s\n' "$sid"; return 0; }
+
+  [ -n "$cwd" ] || cwd=$(tmux display-message -p -t "$pane" '#{pane_current_path}' 2>/dev/null)
+  t=$(cat "$HOME/.cache/tmux-agent-status/$(tmux display-message -p -t "$pane" '#{pane_id}' 2>/dev/null | tr -d '%').transcript" 2>/dev/null) || return 1
+  [ -n "$t" ] && [ -f "$t" ] || return 1
+
+  enc="${cwd//\//-}"
+  dir="${t%/*}"; dir="${dir##*/}"
+  [ "$dir" = "$enc" ] || return 1
+
+  sid="${t##*/}"
+  printf '%s\n' "${sid%.jsonl}"
+}
+
+# _t_agent_touch PANE — record that this agent was just brought back.
+#
+# ⚠️  This is what stops the lifecycle sweep from undoing the thing you just did.
+# "Inactive" is measured from the last turn in the CONVERSATION, and waking an
+# agent adds no turn — so an agent you woke after three days still reads as three
+# days idle, and the next hourly pass puts it straight back to sleep. That is not
+# hypothetical: a session woken by hand was re-slept within the hour, and one that
+# had already passed the 7-day mark was shut down again.
+#
+# The lifecycle treats an agent as active as of whichever is later: its last real
+# turn, or this stamp.
+_t_agent_touch() {
+  tmux set-option -p -t "$1" @agent-woken "$(date +%s)" 2>/dev/null || true
+}
+
+# _t_agent_resume_cmd PANE — the command that brings PANE's agent back.
+# $T_RESUME wins outright; otherwise an exact -r when the id is known, and
+# --continue only as the fallback for an agent that never had one.
+_t_agent_resume_cmd() {
+  local sid
+  if [ -n "${T_RESUME:-}" ]; then printf '%s\n' "$T_RESUME"; return 0; fi
+  sid=$(_t_agent_sid "$1" 2>/dev/null)
+  if [ -n "$sid" ]; then printf '%s -r %s\n' "${T_AUTOSTART:-claude}" "$sid"
+  else printf '%s --continue\n' "${T_AUTOSTART:-claude}"; fi
+}
+
+# _t_agent_restart PANE — exit the agent in PANE and resume the same
+# conversation, in place. The "turn it off and on again" the TCC note above
+# keeps prescribing, as one keystroke (Ctrl+b R) instead of a Ctrl+C Ctrl+C
+# and retyping the resume flag.
+#
+# Exit is a signal to the agent process, not send-keys Ctrl+C: keystrokes land
+# in whatever UI state the agent happens to be in (a dialog, a half-typed
+# prompt that the first Ctrl+C merely clears), while SIGTERM means quit in
+# every state. Claude Code writes its transcript continuously, so nothing is
+# lost even on the SIGKILL escalation — the resume picks up the same
+# conversation either way.
+#
+# Resume is send-keys through the pane's interactive shell, for the same two
+# reasons _t_new_session gives: the `claude` alias (and its flags) applies,
+# and an exit later drops to a live shell. The command comes from
+# _t_agent_resume_cmd: $T_RESUME verbatim if set, else `$T_AUTOSTART -r <id>` on
+# this pane's exact session id, and only `--continue` when no id can be found.
+#
+# An agent that has already exited restarts too: pane sitting at a plain shell
+# prompt, no agent process — just send the resume command. Anything else in
+# the foreground (an editor, a running build) is refused rather than typed at.
+_t_agent_restart() {
+  local pane="$1" pane_pid session pid cur resume waited sid title
+  session=$(tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null)
+  pane_pid=$(tmux display-message -p -t "$pane" '#{pane_pid}' 2>/dev/null)
+  [ -n "${session:-}" ] || { echo "no such pane: $pane" >&2; return 1; }
+
+  # ⚠️  Resolve and stamp the session id BEFORE anything is killed. Once the
+  # agent process is gone the pane title loses its glyph, and a later save can no
+  # longer tell this pane was ever an agent — the id has to be on the pane by
+  # then or it is gone.
+  sid=$(_t_agent_sid "$pane" 2>/dev/null)
+  if [ -n "$sid" ]; then
+    tmux set-option -p -t "$pane" @agent-session-id "$sid" 2>/dev/null
+    title=$(tmux display-message -p -t "$pane" '#{pane_title}' 2>/dev/null)
+    case "$title" in
+      *" "*) tmux set-option -p -t "$pane" @agent-task "${title#* }" 2>/dev/null ;;
+    esac
+  fi
+
+  pid=$(_t_agent_pid "$pane_pid")
+
+  if [ -z "$pid" ]; then
+    cur=$(tmux display-message -p -t "$pane" '#{pane_current_command}' 2>/dev/null)
+    case "${cur##*/}" in
+      bash|zsh|sh|dash|fish|ksh) ;;  # dead agent at its shell — resume is the restart
+      *)
+        echo "no agent in this pane — it is running '${cur:-?}'" >&2
+        return 1
+        ;;
+    esac
+  else
+    kill -TERM "$pid" 2>/dev/null
+    # ⚠️  Poll for the pid to actually go, don't just sleep: send-keys while the
+    # agent is still dying gets eaten by the agent, and the resume command is
+    # simply lost. 8s of TERM grace, then KILL — the transcript is already on
+    # disk, so KILL costs nothing but tidiness.
+    waited=0
+    while kill -0 "$pid" 2>/dev/null; do
+      if [ "$waited" -ge 40 ]; then kill -KILL "$pid" 2>/dev/null; fi
+      [ "$waited" -ge 55 ] && { echo "agent (pid $pid) would not die" >&2; return 1; }
+      sleep 0.2
+      waited=$((waited + 1))
+    done
+  fi
+
+  resume=$(_t_agent_resume_cmd "$pane")
+  _t_agent_touch "$pane"
+  tmux send-keys -t "$pane" "$resume" Enter
 }
 
 # ---------------------------------------------------------------------------
@@ -890,6 +1939,7 @@ _t_kill_agent() {
 # each session in turn and looking. The command column is the real process, so
 # a wedged pane still shows what it's stuck on.
 tw() {
+  case "${1:-}" in -h|--help) _t_help; return 0 ;; esac
   local out
   out=$(tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index}	#{window_name}	[#{pane_current_command}]	#{pane_current_path}' 2>/dev/null) \
     || { echo "no tmux sessions"; return 1; }
@@ -903,11 +1953,17 @@ tw() {
 # exact failure this whole setup exists to prevent; that one stays a thing you
 # type out in full.
 tk() {
+  case "${1:-}" in -h|--help) _t_help; return 0 ;; esac
+  local sid
   if [ -z "$1" ]; then
     echo "usage: tk SESSION   (list them with: tl)" >&2
     return 2
   fi
-  tmux kill-session -t "=$1"
+  # By id — `tk release-2.0` is exactly the case that used to answer
+  # "can't find pane: 0" and leave the session running.
+  sid=$(_t_session_id "$1")
+  [ -n "$sid" ] || { echo "tk: no session named '$1'" >&2; return 1; }
+  tmux kill-session -t "$sid"
 }
 
 # ---------------------------------------------------------------------------
@@ -940,6 +1996,17 @@ _t_complete() {
 
   # Only the session-name argument.
   [ "$COMP_CWORD" -gt 1 ] && return 0
+
+  # A slash means they're typing a repo, not a session — `t ~/Projects/…`. Hand
+  # it to directory completion, which is the only useful answer there. Without
+  # this the `complete -F` below wins and offers session names to a path, which
+  # is worse than no completion at all.
+  case "$cur" in
+    */*|'~'*)
+      COMPREPLY=( $(compgen -d -- "$cur") )
+      return 0
+      ;;
+  esac
 
   # A herestring, not `done < <(tmux ls …)`: process substitution is a syntax
   # error under /bin/sh, and one anywhere in this file breaks sourcing it from

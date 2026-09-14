@@ -61,8 +61,41 @@ fi
 # An empty file means "nothing to do" — Esc, or an action the picker finished by
 # itself (jump, alongside, files).
 REQUEST=$(mktemp) || exit 0
-trap 'rm -f "$REQUEST"' EXIT
 QUERY=""
+
+# ---------------------------------------------------------------------------
+# Always succeed — enforced here, not just intended at the bottom
+# ---------------------------------------------------------------------------
+# The `exit 0` at the end of this file says this script never reports failure,
+# because `run-shell` puts any non-zero status on screen as
+# "'…/tmux-agent-pick.sh' returned N" — and non-zero is NORMAL here: switching
+# the client tears the popup down mid-command, and Esc out of fzf is 130.
+#
+# That final line only covers the paths that reach it. A "returned 2" was seen
+# in the wild that none of them explain, so the guarantee now lives in the EXIT
+# trap, which runs however we leave — including paths that never reach the last
+# line. `exit 0` inside an EXIT trap overrides the status bash was about to use.
+#
+# ⚠️  This suppresses the message, it does not hide the cause: a non-zero status
+# is recorded with the line it came from. Nothing downstream is silenced either —
+# every real failure is reported by tmux-agent-do.sh via display-message before
+# it exits, which is a different mechanism entirely.
+#
+# A trap cannot fire if bash never started (a syntax error, a missing
+# interpreter), so an empty log alongside a "returned N" is itself the answer:
+# the failure was before the first line ran.
+PICK_LOG="${TMPDIR:-/tmp}/tmux-agent-pick.log"
+_pick_exit() {
+  local status=$?
+  if [ "$status" -ne 0 ]; then
+    printf '%s  exit=%s  line=%s  verb=%s  client=%s\n' \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "$status" "${BASH_LINENO[0]:-?}" \
+      "${verb:-none}" "${CLIENT:-?}" >> "$PICK_LOG" 2>/dev/null
+  fi
+  rm -f "$REQUEST"
+  exit 0
+}
+trap _pick_exit EXIT
 
 while :; do
   : > "$REQUEST"
@@ -86,7 +119,7 @@ while :; do
       # An agent mid-task is the exact thing this setup exists not to lose, so
       # this asks and defaults to no. Naming it in the question matters: "Kill the
       # agent in api-gateway?" is answerable, "Are you sure?" is not.
-      if "$DIALOG" confirm " kill agent " "Kill the agent in ${arg2:-$arg1}?"; then
+      if "$DIALOG" confirm " kill agent " "Kill the agent in ${arg2:-$arg1}?" danger; then
         "$DO" kill "$arg1"
       fi
       # Either way, back to the list: clearing out four finished agents should be
@@ -98,7 +131,7 @@ while :; do
       answer=$(mktemp) || break
       # Prefilled with the current name, so enter on its own is a no-op rather
       # than a mistake.
-      "$DIALOG" input " rename agent " "New name for ${arg2:-this agent}" "$answer" "$arg2"
+      "$DIALOG" input " rename agent " "New name for ${arg2:-this agent}" "$answer" "$arg2" edit
       newname=$(cat "$answer" 2>/dev/null)
       rm -f "$answer"
       [ -n "$newname" ] && "$DO" rename "$arg1" "$newname"
@@ -108,7 +141,7 @@ while :; do
       name="$arg1"
       if [ -z "$name" ]; then
         answer=$(mktemp) || break
-        "$DIALOG" input " new agent " "Name for the new agent" "$answer"
+        "$DIALOG" input " new agent " "Name for the new agent" "$answer" "" create
         name=$(cat "$answer" 2>/dev/null)
         rm -f "$answer"
       fi

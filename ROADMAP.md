@@ -9,13 +9,18 @@ neat to have.
 
 ## Where this is right now
 
-**v0.2.4.** Routing is largely solved: `prefix + j`, waiting times, waiting-first
-ordering, desktop notifications. Each agent's row now also carries what it is
-doing to the machine (`⚙N` processes) and how much context it is carrying
-(`736k`), and the doctor catches a tmux server that has outlived the terminal
-which started it.
+**v0.3.0.** Routing is largely solved: `prefix + j`, waiting times, waiting-first
+ordering, desktop notifications. Each agent's row also carries what it is doing to
+the machine (`⚙N` processes) and how much context it is carrying (`736k`), and the
+doctor catches a tmux server that has outlived the terminal which started it.
 
-**Next: the 0.3 board** — one popup, every agent, last few lines each, built from
+**Reconstruction is now solved too, and out of order** — it was meant to follow the
+board. A reboot no longer costs anything: the server's shape is snapshotted on
+every change and replayed at login, agents sleep and wake on their exact
+conversations, and idle ones age out instead of accumulating. That pulled the
+milestone numbering forward, so the board is **0.4** below, not 0.3.
+
+**Next: the 0.4 board** — one popup, every agent, last few lines each, built from
 `capture-pane` snapshots. Then the filter keys. Everything else below is unstarted.
 
 ## The five taxes
@@ -64,7 +69,33 @@ choose-tree, which this project's own docs point people at.
 | **Opt-in desktop notification when an agent starts waiting** | Lets you leave tmux entirely and still be pulled back at the right moment. `terminal-notifier`/`osascript`, `notify-send` on Linux, off by default | M |
 | **Branch + dirty count in the preview header** | "Which agents have uncommitted work?" is currently unanswerable without visiting each one | M |
 
-## 0.3 — See everything at once
+## 0.3 — Survive the machine going away — **shipped in 0.3.0**
+
+*Reconstruction, tax #2. Shipped ahead of the board because the cost was daily and
+the board is still large.*
+
+A tmux server is a process; a reboot takes every session with it. The work itself
+was never in tmux — Claude Code keys each conversation to a working directory — so
+what had to be kept was the **shape** of the server, and a reliable way to put an
+agent back on *its own* conversation rather than the most recent one in its folder.
+
+| Item | What it removes |
+|---|---|
+| ~~**Snapshot and restore**~~ — `tsave`, `trestore`, `tsnaps`; ten tmux hooks autosave on every change, launchd every 5 min, restore at login | Rebuilding a day's worth of sessions by hand after a restart |
+| ~~**Sleep and wake**~~ — `prefix + S` / `prefix + R`, `ctrl-o` in the picker, `tsleep` / `twake` | ~400MB per idle agent, held for an answer that isn't coming today |
+| ~~**Exact-conversation resume**~~ — the session id is recorded *before* the process stops; wake is `claude -r <id>`, never `--continue` | Agents that share a folder silently coming back as each other |
+| ~~**Ageing**~~ — `tlifecycle`, sleep at 48h, shut down at 7d, `tarchive` to find and restore | Deciding, repeatedly, whether an agent from last Tuesday is still needed |
+| ~~**Battery guard**~~ — `tpower`, sleep idle agents below 10% on battery | Losing conversations because the laptop died |
+| ~~**Favorites**~~ — `tf`, `prefix + F`; defaults for a name, so `t NAME` honours them too | Retyping the same folder and command for the agents you start weekly |
+| ~~**Throwaway agents**~~ — `tq`, scratch dirs under `~/.cache`, `tq keep` to promote | A folder whose only content is the note explaining that the folder exists |
+
+The one non-obvious constraint, worth keeping in mind for anything that restarts an
+agent: **`claude --continue` resolves by directory, not by agent.** Every feature
+above depends on recording the session id first. A future feature that restarts an
+agent without doing so will silently merge conversations, and the failure looks
+like an agent that has lost its memory rather than like a bug here.
+
+## 0.4 — See everything at once
 
 *Awareness without navigation.*
 
@@ -87,7 +118,7 @@ layout. If it turns into a fight, that's the moment to consider a small compiled
 TUI for *that view only*, keeping everything else as shell. Deciding that early is
 cheaper than discovering it late.
 
-## 0.4 — Move work between agents
+## 0.5 — Move work between agents
 
 *The handoff is the switch. Make it one key.*
 
@@ -98,7 +129,7 @@ cheaper than discovering it late.
 | **Leave a note for an agent** — append to its `CLAUDE.md` from the picker | Discovered by using it: the seeded `CLAUDE.md` turned out to be the natural channel for telling *another* agent something, because Claude Code loads it at session start. Cheaper than the send-to-prompt version and it survives the agent restarting | S |
 | **Changed-files view in the browser** — files touched since the agent started, `ctrl-d` for a diff | Turns "what did it do?" into a keystroke instead of a review session | M |
 
-## 0.5 — Start work without ceremony
+## 0.6 — Start work without ceremony
 
 *From "I should look at X" to an agent working on X, with nothing in between.*
 

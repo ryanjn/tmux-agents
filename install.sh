@@ -4,6 +4,10 @@
 #   ./install.sh                 install with sane defaults
 #   ./install.sh --with-status   also put agent counts in your tmux status line
 #   ./install.sh --with-extras   also install the optional tmux QoL settings
+#   ./install.sh --with-launchd  also load the save/restore and battery jobs
+#   ./install.sh --no-cli        skip the ~/.local/bin command symlinks
+#   ./install.sh --login-shell   force tmux's default login shell in panes
+#   ./install.sh --no-login-shell  force a non-login interactive shell instead
 #   ./install.sh --no-shell      tmux keybindings only, no shell functions
 #   ./install.sh --dry-run       print every change, make none
 #   ./install.sh --uninstall     remove everything this added
@@ -32,6 +36,9 @@ STAMP=$(date +%Y%m%d%H%M%S)
 
 WITH_STATUS=0
 WITH_EXTRAS=0
+WITH_LAUNCHD=0
+WITH_CLI=1
+LOGIN_SHELL=auto
 WITH_SHELL=1
 DRY_RUN=0
 UNINSTALL=0
@@ -59,12 +66,28 @@ warn() { printf '  %s!%s %s\n' "$Y" "$Z" "$*"; }
 die()  { printf '  %s✗%s %s\n' "$R" "$Z" "$*" >&2; exit 1; }
 act()  { if [ "$DRY_RUN" = 1 ]; then printf '  %swould%s %s\n' "$DIM" "$Z" "$*"; else printf '  %s\n' "$*"; fi; }
 
+# link_cli DEST SRC — symlink, but never over a real file someone else owns.
+# A stale symlink from an older clone is ours to repoint; a regular file at that
+# name belongs to another tool and is left alone with a warning.
+link_cli() {
+  dest="$1"; src="$2"
+  if [ -L "$dest" ] || [ ! -e "$dest" ]; then
+    ln -sfn "$src" "$dest" && ok "$(basename "$dest")"
+  else
+    warn "$dest exists and is not a symlink — left alone"
+  fi
+}
+
 usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --with-status) WITH_STATUS=1 ;;
     --with-extras) WITH_EXTRAS=1 ;;
+    --with-launchd) WITH_LAUNCHD=1 ;;
+    --no-cli)      WITH_CLI=0 ;;
+    --login-shell)    LOGIN_SHELL=1 ;;
+    --no-login-shell) LOGIN_SHELL=0 ;;
     --no-shell)    WITH_SHELL=0 ;;
     --dry-run)     DRY_RUN=1 ;;
     --uninstall)   UNINSTALL=1 ;;
@@ -167,6 +190,30 @@ if [ "$UNINSTALL" = 1 ]; then
     rm -rf "$HOME/.cache/tmux-agent-status"
     ok "removed the waiting-state cache"
   fi
+
+  # Only our own symlinks, and only the ones pointing into THIS clone: a name
+  # someone has since pointed at another checkout is not ours to remove.
+  BIN_DIR="$HOME/.local/bin"
+  for n in tsleep twake tsnaps tsave trestore tarchive tpower tdoctor tf tlifecycle; do
+    tgt=$(readlink "$BIN_DIR/$n" 2>/dev/null) || continue
+    case "$tgt" in
+      "$HOME_DIR"/bin/*)
+        if [ "$DRY_RUN" = 1 ]; then act "remove $BIN_DIR/$n"
+        else rm -f "$BIN_DIR/$n"; ok "removed $BIN_DIR/$n"; fi ;;
+    esac
+  done
+
+  # launchd jobs, if --with-launchd ever loaded them.
+  if [ "$(uname -s)" = "Darwin" ]; then
+    for job in persist power; do
+      plist="$HOME/Library/LaunchAgents/com.tmux-agents.$job.plist"
+      [ -e "$plist" ] || continue
+      if [ "$DRY_RUN" = 1 ]; then act "unload and remove $plist"; continue; fi
+      launchctl bootout "gui/$(id -u)/com.tmux-agents.$job" >/dev/null 2>&1 || true
+      rm -f "$plist"
+      ok "removed com.tmux-agents.$job"
+    done
+  fi
   say ""
   say "Done. The repo itself is untouched — delete it whenever you like."
   say "${DIM}Your tmux config and shell rc were backed up as *.bak-$NAME-$STAMP${Z}"
@@ -227,6 +274,46 @@ fi
 say ""
 say "${B}Writing config${Z}"
 
+# ---------------------------------------------------------------------------
+# Login shell, or not
+# ---------------------------------------------------------------------------
+# tmux starts a LOGIN shell. bash logins read ~/.bash_profile and never
+# ~/.bashrc; zsh logins read ~/.zprofile and never ~/.zshrc. If the file holding
+# your aliases is not reachable from there, `t` starts an agent whose `claude` is
+# the bare binary rather than your alias — the same word, different behaviour,
+# and nothing reports it. Rather than guess, look.
+#
+# Deliberately conservative: only when the interactive file exists AND the login
+# file demonstrably does not pull it in. An unreadable or absent login file means
+# we cannot tell, and we leave tmux's default alone.
+detect_login_shell() {
+  case "${SHELL##*/}" in
+    bash) login_f="$HOME/.bash_profile"; inter_f="$HOME/.bashrc" ;;
+    zsh)  login_f="${ZDOTDIR:-$HOME}/.zprofile"; inter_f="${ZDOTDIR:-$HOME}/.zshrc" ;;
+    *)    return 1 ;;
+  esac
+  [ -r "$inter_f" ] || return 1
+  [ -r "$login_f" ] || return 1
+  # Does the login file source the interactive one? Comments are stripped first,
+  # then a real sourcing line is matched in any of its usual shapes:
+  #   . ~/.bashrc    source $HOME/.bashrc    [ -f ~/.bashrc ] && . ~/.bashrc
+  #   if [ -f ~/.bashrc ]; then . ~/.bashrc; fi
+  # Requiring whitespace after the dot is what keeps a path like /opt/x.y/bin
+  # from counting as a source command.
+  base=$(basename "$inter_f")
+  if sed 's/#.*//' "$login_f" 2>/dev/null \
+     | grep -qE "(^|[[:space:]])(\.|source)[[:space:]]+[^[:space:];&|]*${base}"; then
+    return 1
+  fi
+  return 0
+}
+
+if [ "$LOGIN_SHELL" = auto ]; then
+  if detect_login_shell; then DEFAULT_COMMAND=""; else DEFAULT_COMMAND="# "; fi
+elif [ "$LOGIN_SHELL" = 0 ]; then DEFAULT_COMMAND=""
+else DEFAULT_COMMAND="# "
+fi
+
 render() {              # render IN OUT
   in="$1"; out="$2"
   if [ "$WITH_STATUS" = 1 ]; then status_comment=""; else status_comment="# "; fi
@@ -234,6 +321,8 @@ render() {              # render IN OUT
   mkdir -p "$(dirname "$out")"
   sed -e "s|@TMUX_AGENTS_HOME@|$HOME_DIR|g" \
       -e "s|@STATUS_COMMENT@|$status_comment|g" \
+      -e "s|@HOME@|$HOME|g" \
+      -e "s|@DEFAULT_COMMAND@|$DEFAULT_COMMAND|g" \
       "$in" > "$out"
 }
 
@@ -259,12 +348,84 @@ write_block "$TMUX_CONF" \
 [ "$DRY_RUN" = 1 ] || ok "$TMUX_CONF sources it"
 
 if [ "$WITH_SHELL" = 1 ]; then
+  # Order matters: agents.sh defines the classifier and _TA_BIN that the other
+  # three build on, so it is sourced first. The rest are independent of each
+  # other. Each line is guarded, so removing a file just removes its commands.
+  SHELL_LINES=""
+  for sf in agents.sh quick-agents.sh tmux-persist.sh favorites.sh; do
+    SHELL_LINES="$SHELL_LINES[ -r \"$HOME_DIR/shell/$sf\" ] && . \"$HOME_DIR/shell/$sf\"
+"
+  done
   write_block "$RC_FILE" \
     "# Managed by $HOME_DIR/install.sh — your edits inside this block will be lost." \
-    "[ -r \"$HOME_DIR/shell/agents.sh\" ] && . \"$HOME_DIR/shell/agents.sh\""
+    "${SHELL_LINES%
+}"
   [ "$DRY_RUN" = 1 ] || ok "$RC_FILE sources the shell helpers"
 else
   say "  ${DIM}skipping shell helpers (--no-shell)${Z}"
+fi
+
+# ---------------------------------------------------------------------------
+# Commands that work outside an interactive shell
+# ---------------------------------------------------------------------------
+# tsave, tdoctor and the rest are shell functions, which means cron, launchd and
+# `ssh host tsave` cannot see them. These symlinks give the same names a real
+# executable: tmux-agent-cli.sh dispatches on its own basename, so one script
+# backs all of them.
+if [ "$WITH_CLI" = 1 ]; then
+  say ""
+  say "${B}Commands${Z}"
+  BIN_DIR="$HOME/.local/bin"
+  if [ "$DRY_RUN" = 1 ]; then
+    act "symlink tsleep twake tsnaps tsave trestore tarchive tpower tdoctor tf tlifecycle -> $BIN_DIR"
+  else
+    mkdir -p "$BIN_DIR"
+    for n in tsleep twake tsnaps tsave trestore tarchive tpower tdoctor tf; do
+      link_cli "$BIN_DIR/$n" "$HOME_DIR/bin/tmux-agent-cli.sh"
+    done
+    link_cli "$BIN_DIR/tlifecycle" "$HOME_DIR/bin/tmux-agent-lifecycle.sh"
+    case ":$PATH:" in
+      *":$BIN_DIR:"*) ok "$BIN_DIR is on your PATH" ;;
+      *) warn "$BIN_DIR is not on your PATH — add it, or the names above won't resolve" ;;
+    esac
+  fi
+else
+  say "  ${DIM}skipping command symlinks (--no-cli)${Z}"
+fi
+
+# ---------------------------------------------------------------------------
+# launchd: snapshot/restore, and the battery guard
+# ---------------------------------------------------------------------------
+# Opt-in. These are background jobs that outlive your terminal, so installing
+# them silently would be rude — and everything in this repo works without them.
+# What you lose without them: snapshots only happen on tmux's own hooks (not on
+# a 5-minute clock), nothing restores your sessions at login, and nothing sleeps
+# agents when the battery gets low. tsave/trestore still work by hand.
+if [ "$WITH_LAUNCHD" = 1 ]; then
+  say ""
+  say "${B}launchd jobs${Z}"
+  if [ "$(uname -s)" != "Darwin" ]; then
+    say "  ${DIM}not macOS — skipping${Z}"
+  else
+    mkdir -p "$HOME/.local/state/tmux-agents" 2>/dev/null || true
+    LA="$HOME/Library/LaunchAgents"
+    for job in persist power; do
+      plist="com.tmux-agents.$job.plist"
+      src="$HOME_DIR/macos/$plist.in"
+      [ -r "$src" ] || { warn "$plist.in missing — skipping"; continue; }
+      if [ "$DRY_RUN" = 1 ]; then act "render $plist -> $LA/$plist, then bootstrap"; continue; fi
+      mkdir -p "$LA"
+      render "$src" "$LA/$plist"
+      # bootout first: bootstrap on an already-loaded label is an error, and a
+      # label left pointing at an old path is worse than one that is absent.
+      launchctl bootout "gui/$(id -u)/com.tmux-agents.$job" >/dev/null 2>&1 || true
+      if launchctl bootstrap "gui/$(id -u)" "$LA/$plist" 2>/dev/null; then
+        ok "com.tmux-agents.$job loaded"
+      else
+        warn "could not bootstrap com.tmux-agents.$job — load it from $LA/$plist by hand"
+      fi
+    done
+  fi
 fi
 
 # ---------------------------------------------------------------------------

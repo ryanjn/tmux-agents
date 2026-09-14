@@ -28,11 +28,35 @@ printf 'syntax\n'
 for f in "$ROOT"/bin/*.sh "$ROOT"/hooks/*.sh "$ROOT"/shell/*.sh "$ROOT"/install.sh "$ROOT"/test/smoke.sh; do
   check "bash -n $(basename "$f")" "bash -n '$f'"
 done
-check "sh -n shell/agents.sh (sourced by run-shell, which uses sh)" "sh -n '$ROOT/shell/agents.sh'"
+# NOT `sh -n shell/agents.sh`. That check was here on the belief that run-shell
+# hands this file to sh, and it is not true: every run-shell in the tmux config
+# invokes a script FILE, each with a bash shebang, and those scripts source the
+# helpers from bash. sh never parses our shell/ files.
+#
+# It passed for years only because macOS /bin/sh is bash in sh-mode. On a Linux
+# runner /bin/sh is dash and it fails immediately — agents.sh has 17 array
+# constructs and 8 here-strings and has always been openly bash.
+#
+# What actually has to hold is the shebang contract, so check that instead.
+for f in $(grep -ohE '@TMUX_AGENTS_HOME@/bin/[a-z-]+\.sh' "$ROOT"/tmux/*.conf.in | sed 's|@TMUX_AGENTS_HOME@/||' | sort -u); do
+  check "run-shell target $f declares bash (sh must never parse our code)" \
+    "head -1 '$ROOT/$f' | grep -q 'bash'"
+done
 
 printf '\nshell helpers load together\n'
-check "all four shell files source in install order" \
-  "bash -c 'set -u; for f in agents.sh quick-agents.sh tmux-persist.sh favorites.sh; do . \"$ROOT/shell/\$f\" || exit 1; done'"
+# Sourced in the order install.sh writes into the rc. A failure here is the
+# whole shell layer being dead, so say WHY rather than just failing.
+source_all_out=$(bash -c '
+  set -u
+  for f in agents.sh quick-agents.sh tmux-persist.sh favorites.sh; do
+    . "$1/shell/$f" || { echo "failed sourcing $f" >&2; exit 1; }
+  done' _ "$ROOT" 2>&1)
+if [ $? -eq 0 ]; then
+  ok "all four shell files source in install order"
+else
+  no "all four shell files source in install order"
+  printf '      %s\n' "$source_all_out" | head -5
+fi
 for fn in t tl ta ts tk tmv tq tf tsave trestore tdoctor tpower; do
   check "defines $fn" \
     "bash -c 'for f in agents.sh quick-agents.sh tmux-persist.sh favorites.sh; do . \"$ROOT/shell/\$f\"; done; declare -F $fn >/dev/null || type $fn >/dev/null 2>&1'"
@@ -48,6 +72,23 @@ check "every function the doctor expects is actually defined" \
     done
     [ -z \"\$miss\" ] || { echo \"missing:\$miss\" >&2; exit 1; }
   '"
+
+# A file your rc sources must return 0. quick-agents.sh ended with a
+# `tmux set-hook -g`, which needs a running SERVER — so with tmux installed and
+# no server up (every first shell after a reboot) the hook failed and, being the
+# last command, became the file's exit status. Under `set -e` in an rc that
+# aborts the rest of your shell startup.
+#
+# TMUX_TMPDIR at an empty directory is how "installed but no server" is
+# simulated; plain `unset TMUX` is not enough, since tmux still finds the socket.
+NOSRV=$(mktemp -d)
+for f in agents quick-agents tmux-persist favorites; do
+  check "shell/$f.sh returns 0 with tmux installed but no server running" \
+    "[ \"\$(env -u TMUX TMUX_TMPDIR='$NOSRV' bash -c '
+        . \"$ROOT/shell/agents.sh\" >/dev/null 2>&1
+        . \"$ROOT/shell/$f.sh\" >/dev/null 2>&1
+        echo \$?')\" = 0 ]"
+done
 
 check "_TA_BIN resolves to this clone's bin/" \
   "bash -c '. \"$ROOT/shell/agents.sh\"; [ \"\$_TA_BIN\" = \"$ROOT/bin\" ]'"
@@ -369,10 +410,52 @@ check "tsnaps -l reads is_agent at 15, not an older position" \
 check "trestore reads the snapshot by name, in writer order" \
   "grep -q 'read -r tag session widx wname wactive wlayout pidx pactive cwd cmd title paneid optsid opttask isagent task sid' '$ROOT/bin/tmux-agent-restore.sh'"
 
+# "Is this pane an agent?" is answered in two places — shell/agents.sh for
+# everything live, bin/tmux-agent-save.sh for the snapshot. They drifted: one
+# accepted any single-character first token, the other required a
+# non-alphanumeric one, so a pane could be a working agent to the status line
+# and a plain shell to the snapshot with neither side reporting anything.
+glyph_agents() { # the rule as shell/agents.sh applies it
+  local t="$1" first="${1%% *}" g=0
+  if [ "$t" != "$first" ] && [ -n "$first" ] && [ ${#first} -le 4 ]; then
+    case "$first" in *[[:alnum:]]*) ;; *) g=1 ;; esac
+  fi
+  printf '%s' "$g"
+}
+glyph_save() {   # the rule as bin/tmux-agent-save.sh applies it
+  printf '%s' "$1" | awk '{n=split($0,w," "); print (n>1 && w[1] !~ /[[:alnum:]]/ && length(w[1])<=4) ? 1 : 0}'
+}
+while IFS='|' read -r title want; do
+  [ -n "$title" ] || continue
+  # ${title} braced: a multibyte character immediately after $title gets
+  # absorbed into the variable name in some locales, and the loop dies with
+  # "unbound variable" on a name you never wrote.
+  check "detection: «${title}» -> ${want}, and both sides agree" \
+    "[ \"\$(glyph_agents '$title')\" = '$want' ] && [ \"\$(glyph_save '$title')\" = '$want' ]"
+done <<'TITLES'
+✳ writing the parser|1
+◆ needs an answer|1
+⠋ spinning up|1
+a real fix for the parser|0
+I think so|0
+no glyph here|0
+plain-shell-title|0
+TITLES
+
+check "the live classifier still requires a space after the glyph" \
+  "[ \"\$(glyph_agents '✳')\" = 0 ]"
+
 check "launchd plists are templates, not one person's paths" \
   "grep -q '@TMUX_AGENTS_HOME@' '$ROOT/macos/com.tmux-agents.persist.plist.in' && ! grep -rq '/Users/' '$ROOT/macos'"
-check "--with-launchd --dry-run renders without loading anything" \
-  "HOME='$TMPHOME' '$ROOT/install.sh' --dry-run --with-launchd --rc '$TMPHOME/.bash_profile' --tmux-conf '$TMPHOME/.tmux.conf' 2>/dev/null | grep -q 'com.tmux-agents.persist.plist'"
+# launchd is macOS. On Linux the installer correctly skips the whole block, so
+# asserting the plist name appears would be asserting a bug.
+if [ "$(uname -s)" = Darwin ]; then
+  check "--with-launchd --dry-run renders without loading anything" \
+    "HOME='$TMPHOME' '$ROOT/install.sh' --dry-run --with-launchd --rc '$TMPHOME/.bash_profile' --tmux-conf '$TMPHOME/.tmux.conf' 2>/dev/null | grep -q 'com.tmux-agents.persist.plist'"
+else
+  check "--with-launchd is a no-op off macOS" \
+    "HOME='$TMPHOME' '$ROOT/install.sh' --dry-run --with-launchd --rc '$TMPHOME/.bash_profile' --tmux-conf '$TMPHOME/.tmux.conf' 2>/dev/null | grep -qv 'com.tmux-agents.persist.plist'"
+fi
 
 HOME="$TMPHOME" XDG_CONFIG_HOME="$TMPHOME/.config" \
   "$ROOT/install.sh" --uninstall --rc "$TMPHOME/.bash_profile" --tmux-conf "$TMPHOME/.tmux.conf" >/dev/null 2>&1

@@ -459,8 +459,21 @@ TXT
 # environment. `run-shell` executes under the tmux SERVER's environment, not the
 # shell that set the hook, so a QA_ROOT you exported here would be invisible to
 # it and the reaper would quietly sweep the default location instead.
-if [ -n "${TMUX:-}" ] || command -v tmux >/dev/null 2>&1; then
+# `tmux info` rather than `command -v tmux`: set-hook -g needs a running SERVER,
+# not just the binary. With tmux installed and no server up — every first shell
+# after a reboot — set-hook fails, and being the last command in the file it
+# became the file's return status. A non-zero return from something your rc
+# sources is a real footgun: under `set -e` it aborts the rest of your shell
+# startup, and a prompt that shows $? greets you with an error you cannot place.
+#
+# Nothing is lost by skipping it. The shell that opens INSIDE the new session
+# sources this file again, with a server up, and sets the hook then.
+if command -v tmux >/dev/null 2>&1 && tmux info >/dev/null 2>&1; then
   tmux set-hook -g 'session-closed[50]' \
     "run-shell -b 'QA_ROOT=\"$QA_ROOT\" QA_PROJECTS=\"$QA_PROJECTS\" \"$QA_REAPER\" session \"#{hook_session_name}\"'" \
-    2>/dev/null
+    2>/dev/null || true
 fi
+
+# Last line on purpose: a sourced file must not hand its caller the exit status
+# of whatever it happened to do last.
+:

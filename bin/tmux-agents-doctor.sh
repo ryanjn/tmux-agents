@@ -194,8 +194,67 @@ if [ -r "$HOME_DIR/shell/agents.sh" ] && . "$HOME_DIR/shell/agents.sh" 2>/dev/nu
   if [ -n "$missing" ]; then bad "helpers loaded but these are missing:$missing"
   else ok "every command in t --help is defined"
   fi
+  # ---------------------------------------------------------------------
+  # Detection, checked against a second opinion
+  # ---------------------------------------------------------------------
+  # Everything in this tool reads from one heuristic: an agent is a pane whose
+  # title starts with a short non-alphanumeric glyph, because that is what
+  # Claude Code writes there. It costs nothing and needs no hook, and it is
+  # entirely outside our control.
+  #
+  # The danger is not that it breaks. It is that a break is invisible: `ta`
+  # prints nothing, the status line reads 0/0/0, prefix+j says nobody is
+  # waiting, and this check used to print "detection runs — sees 0" and call
+  # itself ok. Every one of those looks exactly like a quiet afternoon.
+  #
+  # So ask a second, independent question. Claude Code renames the pane's
+  # COMMAND to its own version string ("2.1.271") — a different tmux field, set
+  # by a different mechanism, that would have to break in the same release for
+  # both to go quiet together. Any pane that looks like an agent by command but
+  # is missing from the rows means the title contract has moved.
   n=$(_t_agent_rows 2>/dev/null | wc -l | tr -d ' ')
-  ok "agent detection runs — sees $n right now"
+  detected=$(_t_agent_rows 2>/dev/null | cut -f3)
+
+  extra_re=""
+  for pr in ${TMUX_AGENT_EXTRA_PROCS:-}; do extra_re="$extra_re|^$pr\$"; done
+  suspects=$(tmux list-panes -a -F '#{pane_id}	#{pane_current_command}	#{pane_title}' 2>/dev/null \
+             | awk -F'\t' -v extra="$extra_re" '
+                 $2 ~ /^[0-9]+\.[0-9]+\.[0-9]+$/ { print; next }
+                 extra != "" && $2 ~ substr(extra, 2) { print }')
+
+  # Count in a variable rather than by counting lines afterwards: the report is
+  # indented, and `grep -c .` happily counts a line of spaces as content.
+  blind=""; nsus=0; nblind=0
+  while IFS="$(printf '\t')" read -r pid cmd title; do
+    [ -n "$pid" ] || continue
+    nsus=$((nsus + 1))
+    case "
+$detected
+" in
+      *"
+$pid
+"*) ;;
+      *) nblind=$((nblind + 1))
+         blind="$blind$pid ($cmd) title=\"$title\"
+" ;;
+    esac
+  done <<EOF
+$suspects
+EOF
+
+  if [ "$nblind" -gt 0 ]; then
+    bad "agent detection is BLIND to $nblind of $nsus pane(s) that look like agents:"
+    printf '%s' "$blind" | while IFS= read -r l; do [ -n "$l" ] && printf '      %s%s%s\n' "$DIM" "$l" "$Z"; done
+    say "      The pane title contract has probably changed. Detection keys on a"
+    say "      short non-alphanumeric glyph at the start of #{pane_title}."
+  elif [ "$nsus" -gt 0 ]; then
+    ver=$(printf '%s\n' "$suspects" | awk -F'\t' 'NF{print $2; exit}')
+    ok "detection agrees with a second signal — $nsus/$nsus agent pane(s) classify (claude $ver)"
+  elif [ "$n" -gt 0 ]; then
+    ok "agent detection sees $n, none of them a recognised agent CLI (extra procs?)"
+  else
+    warn "no agents running, so detection is unverified — start one and re-run"
+  fi
 else
   bad "shell/agents.sh does not load"
 fi

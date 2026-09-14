@@ -2,6 +2,65 @@
 
 Notable changes per release. Dates are the release date, newest first.
 
+## 0.3.1 — 2026-09-14
+
+**Trust the instrument.** Tax zero: everything else in this tool assumes its
+readings are true, and a total blackout of agent detection used to report as a
+green tick.
+
+### Added
+
+- **The doctor verifies detection instead of merely running it.** Claude Code
+  renames the pane's *command* to its version string — a different tmux field,
+  set by a different mechanism, from the pane title everything keys on. Any pane
+  that looks like an agent by command but is missing from the rows now turns the
+  doctor red and names it. Both signals would have to break in the same release
+  to go quiet together.
+- **CI** — shellcheck (`-S error`) plus both suites on every push and PR.
+- **`test/integration.sh`** — drives a real tmux server on its own socket:
+  detection, save, the restore round-trip, and the glyph-less failure mode.
+  Isolation is structural: a PATH shim makes `tmux` mean the test socket for the
+  helpers and everything they shell out to, and the run fails if the default
+  server's session list changed.
+- **A platform table in the README.** The core is portable; notifications, Quick
+  Look, reveal-in-Finder, the battery guard and the launchd jobs are macOS.
+
+### Fixed
+
+- **Detection disagreed with itself.** "Is this pane an agent?" was answered in
+  two places under two different rules: `shell/agents.sh` accepted any title
+  whose first token was a single character, `tmux-agent-save.sh` required a
+  non-alphanumeric one. So a pane titled `a real fix for the parser` was a
+  working agent to `ta`, the picker and the status line, and a plain shell to the
+  snapshot. `I think so` did it too. Both now apply the stricter rule, pinned
+  together by a test. Byte length rather than character length is deliberate:
+  awk counts bytes and so does bash outside a UTF-8 locale, which is what launchd
+  hands these scripts.
+- **Sourcing `quick-agents.sh` returned non-zero with no tmux server running.**
+  It ended with `tmux set-hook -g`, which needs a running server rather than just
+  the binary, so every first shell after a reboot sourced an rc file that
+  returned 1 — enough to abort the rest of startup under `set -e`. Guarded on
+  `tmux info`, and all four shell files are now tested for this.
+
+### Notes for anyone extending this
+
+- **`sh` never parses anything in `shell/`, and a test claimed otherwise for
+  years.** `sh -n shell/agents.sh` was there on the belief that `run-shell`
+  sources it under `sh`. It does not — every `run-shell` invokes a script *file*
+  with a bash shebang. The file has 17 array constructs and 8 here-strings and
+  has always been openly bash; the check passed only because macOS `/bin/sh` is
+  bash in sh-mode, so it was asking bash whether bash could parse bash. The first
+  Linux CI run rejected it in 25 seconds. What is load-bearing is the shebang
+  contract, now checked instead. `run-shell` itself still runs `sh -c`, so the
+  command *string* in the tmux config must stay sh-safe — a different rule, and
+  the one that survives.
+- **`command tmux` does not reach past a PATH shim.** `command` bypasses
+  functions and aliases, not PATH.
+
+### Tests
+
+162 → 180 in `smoke.sh`, plus 15 in the new `integration.sh`.
+
 ## 0.3.0 — 2026-09-14
 
 **Survive the machine going away.** A reboot no longer costs anything, idle agents

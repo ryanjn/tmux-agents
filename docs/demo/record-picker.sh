@@ -17,8 +17,14 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 NAME="${1:-picker}"
 CAST="$HERE/$NAME.cast"
 GIF="$HERE/$NAME.gif"
-COLS=120
-ROWS=30
+# Recording size. NEVER larger than the terminal it has to render into: tmux
+# paints its whole screen and the terminal clips, so a 120x30 recording in an
+# 80x24 window is a scrolled mess with most of the display dead. Measured from
+# /dev/tty at run time, since $COLUMNS here is this script's shell, not yours.
+WANT_COLS=120
+WANT_ROWS=30
+MIN_COLS=90
+MIN_ROWS=26
 
 for t in asciinema agg tmux; do
   command -v "$t" >/dev/null || { echo "need $t: brew install $t" >&2; exit 2; }
@@ -53,6 +59,29 @@ if [ ! -t 0 ] || [ ! -r /dev/tty ]; then
 MSG
   exit 2
 fi
+
+TTY_COLS=$(tput cols </dev/tty 2>/dev/null || echo 0)
+TTY_ROWS=$(tput lines </dev/tty 2>/dev/null || echo 0)
+
+if [ "$TTY_COLS" -lt "$MIN_COLS" ] || [ "$TTY_ROWS" -lt "$MIN_ROWS" ]; then
+  cat >&2 <<MSG
+
+  This terminal is ${TTY_COLS}x${TTY_ROWS}; the recording needs at least ${MIN_COLS}x${MIN_ROWS}.
+
+  tmux renders its whole screen and the terminal clips what does not fit, so a
+  window this size gives a scrolled, mostly-empty picture rather than a demo.
+
+      Ctrl+b z        zoom this pane to the full window, then run it again
+      or make the terminal window bigger
+
+MSG
+  exit 2
+fi
+
+COLS=$(( TTY_COLS < WANT_COLS ? TTY_COLS : WANT_COLS ))
+ROWS=$(( TTY_ROWS < WANT_ROWS ? TTY_ROWS : WANT_ROWS ))
+printf '  Recording at \033[1m%sx%s\033[0m (terminal is %sx%s).\n\n' \
+  "$COLS" "$ROWS" "$TTY_COLS" "$TTY_ROWS"
 
 read -r -p "  Enter when ready, Ctrl+C to bail. " _ </dev/tty
 

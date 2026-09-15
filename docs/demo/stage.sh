@@ -41,7 +41,10 @@ agent() {               # agent SESSION GLYPH TASK SCREEN [WINDOW]
   mkdir -p "$dir"
   t_ new-session -d -s "$sess" -n "$wname" -c "$dir" \
      "printf '\033]2;$glyph $task\033\\'; cat '$DEMO_HOME/screens/$scr.txt'; while :; do sleep 1; done"
-  t_ new-window -d -t "$sess" -n shell -c "$dir" "while :; do sleep 1; done"
+  # A plain pane's title defaults to the HOSTNAME, which would put this
+  # machine's name in a published GIF. Give it something neutral.
+  t_ new-window -d -t "$sess" -n shell -c "$dir" \
+     "printf '\033]2;shell\033\\'; while :; do sleep 1; done"
 }
 
 sibling() {             # sibling SESSION GLYPH TASK WINDOW SCREEN
@@ -55,7 +58,8 @@ sibling() {             # sibling SESSION GLYPH TASK WINDOW SCREEN
 asleep_agent() {        # asleep_agent SESSION TASK
   local sess="$1" task="$2" dir="$DEMO_HOME/agent-projects/$1" pane
   mkdir -p "$dir"
-  t_ new-session -d -s "$sess" -n claude -c "$dir" "while :; do sleep 1; done"
+  t_ new-session -d -s "$sess" -n claude -c "$dir" \
+     "printf '\033]2;shell\033\\'; while :; do sleep 1; done"
   pane=$(t_ list-panes -t "$sess" -F '#{pane_id}' | head -1)
   t_ set-option -p -t "$pane" @agent-session-id "$(uuidgen | tr 'A-Z' 'a-z')"
   t_ set-option -p -t "$pane" @agent-task "$task"
@@ -132,6 +136,11 @@ EOF
     awk -F'\t' -v OFS='\t' '$1 == "# host" { $2 = "workstation" } { print }' "$snap" > "$snap.tmp" \
       && mv "$snap.tmp" "$snap"
   done
+
+  # status-interval is 5s, so without this the first seconds after attaching
+  # show counts from before the waiting markers were written — ◆1 where it
+  # should read ◆2. Cheap to force; confusing to explain in a recording.
+  t_ refresh-client -S 2>/dev/null || true
 
   printf 'socket=%s home=%s\n' "$SOCKET" "$DEMO_HOME"
 }

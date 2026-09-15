@@ -445,6 +445,20 @@ TITLES
 check "the live classifier still requires a space after the glyph" \
   "[ \"\$(glyph_agents '✳')\" = 0 ]"
 
+# The demo recordings are published. Two things have tried to get into them:
+# tmux titles a plain pane with the HOSTNAME by default, and the snapshot header
+# records it too. Both are staged over; check the committed artifacts, since a
+# leak is only discoverable by reading the file it landed in.
+for f in "$ROOT"/docs/demo/*.cast; do
+  [ -e "$f" ] || continue
+  check "no hostname in $(basename "$f")" \
+    "! grep -qiE '$(hostname -s)|household-laptop' '$f'"
+done
+check "demo panes are given titles, so tmux does not use the hostname" \
+  "grep -q '2;shell' '$ROOT/docs/demo/stage.sh'"
+check "the staged snapshot's host is rewritten before it is recorded" \
+  "grep -q 'workstation' '$ROOT/docs/demo/stage.sh'"
+
 check "launchd plists are templates, not one person's paths" \
   "grep -q '@TMUX_AGENTS_HOME@' '$ROOT/macos/com.tmux-agents.persist.plist.in' && ! grep -rq '/Users/' '$ROOT/macos'"
 # launchd is macOS. On Linux the installer correctly skips the whole block, so

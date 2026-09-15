@@ -22,6 +22,12 @@ runs in a terminal.
 
 `◆` needs you · `●` working · `○` idle
 
+![Every agent and what it is doing, favorites, and what a snapshot holds](docs/demo/tour.gif)
+
+*The shell surface: `ta`, `tl`, `tf`, `tsnaps`. Recorded against this working
+tree with staged agents — see [docs/demo](docs/demo/) for what is real and what
+is staged, and how to regenerate it.*
+
 ---
 
 ## Why

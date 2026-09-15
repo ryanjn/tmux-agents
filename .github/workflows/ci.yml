@@ -28,7 +28,7 @@ jobs:
       # -S error, not -S warning. The warning list is long and grinding it down
       # is not what this gate is for; making it a precondition is how CI stalls.
       - name: shellcheck
-        run: shellcheck -S error bin/*.sh shell/*.sh hooks/*.sh install.sh test/*.sh
+        run: shellcheck -S error bin/*.sh shell/*.sh hooks/*.sh install.sh test/*.sh docs/demo/*.sh
 
       - name: smoke
         run: bash test/smoke.sh

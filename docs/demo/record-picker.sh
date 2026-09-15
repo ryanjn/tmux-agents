@@ -35,6 +35,25 @@ printf '    \033[38;5;110mEnter\033[0m      jump to that agent\n'
 printf '    \033[38;5;110mCtrl+b j\033[0m   go to whoever has waited longest\n\n'
 printf '    \033[38;5;110mCtrl+b d\033[0m   detach — this ENDS the recording\n\n'
 printf '  Aim for under ~25 seconds. Nothing here can touch a real session.\n\n'
+# This needs a real terminal twice over: for the prompt below, and because
+# asciinema records an interactive tmux client that you type into. Run through
+# anything that captures output instead of attaching a tty — a CI step, a pipe,
+# Claude Code's `!` — and there is nowhere for the keystrokes to come from.
+# Say so plainly rather than failing on /dev/tty.
+if [ ! -t 0 ] || [ ! -r /dev/tty ]; then
+  cat >&2 <<MSG
+
+  This one needs an interactive terminal — it records you pressing keys.
+
+  You are running it somewhere without a tty. From inside tmux, open a window:
+
+      Ctrl+b c
+      $HERE/record-picker.sh
+
+MSG
+  exit 2
+fi
+
 read -r -p "  Enter when ready, Ctrl+C to bail. " _ </dev/tty
 
 "$HERE/stage.sh" setup >/dev/null

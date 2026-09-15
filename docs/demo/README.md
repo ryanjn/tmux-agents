@@ -47,18 +47,17 @@ agg --font-size 18 --theme asciinema docs/demo/tour.cast docs/demo/tour.gif
 
 ## Recording the picker
 
-`prefix + a` opens a `display-popup`, and a popup takes keys from the client's
-keyboard. `tmux send-keys` writes to a *pane*, so it cannot deliver a prefix key
-or drive fzf inside the overlay — this one needs a person:
-
 ```bash
-./docs/demo/stage.sh setup
-asciinema rec --overwrite --window-size 120x30 docs/demo/picker.cast \
-  -c "tmux -L ta-demo attach -t api-gateway"
-#   press: Ctrl+b a, arrow down a couple of times, enter, then Ctrl+b j
-#   then:  Ctrl+b d to detach, which ends the recording
-agg --font-size 18 --theme asciinema docs/demo/picker.cast docs/demo/picker.gif
-./docs/demo/stage.sh teardown
+./docs/demo/record-picker.sh
 ```
+
+Stages the server, tells you which keys to press, drops you in recording,
+renders the GIF when you detach, embeds it in the README, and tears down. Run it
+again to redo it — it overwrites.
+
+It is the one recording that needs a person. `prefix + a` opens a
+`display-popup`, and a popup takes keys from the client's keyboard;
+`tmux send-keys` writes to a *pane*, so it can deliver neither the prefix key
+nor fzf navigation inside the overlay.
 
 Keep it under ~25 seconds. One idea per recording beats a tour of everything.

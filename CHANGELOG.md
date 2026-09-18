@@ -2,6 +2,28 @@
 
 Notable changes per release. Dates are the release date, newest first.
 
+## 0.4.0 — 2026-09-17
+
+**Quick jobs.** Ceremony tax: for the ask that is one question and one answer,
+even `tq` is too much — you still sit with an agent.
+
+### Added
+
+- **`prefix + Q` — a quick job.** Type a task, press enter, walk away. `claude
+  -p` runs it detached in that pane's folder; a tmux message (and a desktop
+  notification, under the same `@agent-notify` switch) delivers the first line
+  of the answer. `prefix + Q` again lists recent jobs, and enter reads one.
+- **`tj`** — the same from any shell: `tj TASK`, `tj`, `tj show`, `tj wait`,
+  `tj resume` (carry on as an interactive agent on the job's own session).
+- **`⚡N` / `✉N` in the status line** for running jobs and unread answers.
+
+### Fixed before it shipped
+
+- **A job dispatched from the popup died instantly.** Closing a popup HUPs its
+  process group, and a backgrounded detach could lose the race to `setsid()`.
+  Dispatch now waits on a close-on-exec pipe, so it returns only once the worker
+  is in its own session.
+
 ## 0.3.1 — 2026-09-14
 
 **Trust the instrument.** Tax zero: everything else in this tool assumes its

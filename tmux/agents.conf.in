@@ -104,6 +104,15 @@ bind S run-shell -b "@TMUX_AGENTS_HOME@/bin/tmux-agent-do.sh sleep '#{pane_id}'"
 bind B run-shell "@TMUX_AGENTS_HOME@/bin/tmux-agent-do.sh home '#{pane_id}'"
 
 # ---------------------------------------------------------------------------
+# prefix + Q — a quick job
+# ---------------------------------------------------------------------------
+# Type a task, press enter, and the popup closes: `claude -p` runs it detached in
+# this pane's folder, and you are told when it is done. prefix + Q again lists
+# recent jobs — enter on an empty prompt reads the highlighted one. Capital Q
+# because lowercase q is tmux's display-panes.
+bind Q run-shell "@TMUX_AGENTS_HOME@/bin/tmux-quick-job.sh --popup '#{client_tty}' '#{pane_id}'"
+
+# ---------------------------------------------------------------------------
 # Load-bearing settings
 # ---------------------------------------------------------------------------
 # Claude Code renames its window to its own version string ("2.1.220"), which

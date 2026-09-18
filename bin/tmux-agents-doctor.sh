@@ -81,6 +81,9 @@ done
 if [ "$(readlink "$HOME/.local/bin/tlifecycle" 2>/dev/null)" = "$HOME_DIR/bin/tmux-agent-lifecycle.sh" ]; then ok "~/.local/bin/tlifecycle"
 else warn "~/.local/bin/tlifecycle is not a symlink to bin/tmux-agent-lifecycle.sh"
 fi
+if [ "$(readlink "$HOME/.local/bin/tj" 2>/dev/null)" = "$HOME_DIR/bin/tmux-quick-job.sh" ]; then ok "~/.local/bin/tj"
+else warn "~/.local/bin/tj is not a symlink to bin/tmux-quick-job.sh — fix: ./install.sh"
+fi
 
 # ---------------------------------------------------------------------------
 head_ "Wiring"

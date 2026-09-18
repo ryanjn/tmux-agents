@@ -42,4 +42,6 @@ out="$out$(printf '#[fg=colour41]●%d #[fg=colour244]○%d' "$working" "$idle")
 # Dimmest of all: asleep agents cost nothing and want nothing. Worth a number
 # only so the fleet's real size stays visible once most of it is asleep.
 [ "$asleep" -gt 0 ] && out="$out$(printf ' #[fg=colour240]☾%d' "$asleep")"
+# Quick jobs: ⚡ running, ✉ finished and unread. Silent when there are none.
+out="$out$("$(dirname "${BASH_SOURCE[0]}")/tmux-quick-job.sh" --status 2>/dev/null)"
 printf '%s#[default]' "$out"

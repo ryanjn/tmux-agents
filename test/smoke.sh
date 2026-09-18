@@ -288,6 +288,38 @@ check "does NOT refuse merely because TMUX_PANE is empty" \
 check "every popup we open sets the marker" \
   "[ \$(grep -c 'TMUX_AGENT_IN_POPUP=1' '$ROOT'/bin/tmux-agent-pick.sh '$ROOT'/bin/tmux-file-pick.sh | awk -F: '{s+=\$2} END {print s}') -ge 2 ]"
 
+printf '\nquick jobs\n'
+QJ="$ROOT/bin/tmux-quick-job.sh"
+QJTMP=$(mktemp -d)
+cat > "$QJTMP/fake" <<'FAKE'
+#!/usr/bin/env bash
+sleep 1
+printf '{"type":"result","is_error":false,"result":"## Heading\\n\\nthe answer is 4","session_id":"s-1"}\n'
+FAKE
+cat > "$QJTMP/fail" <<'FAKE'
+#!/usr/bin/env bash
+echo "boom: not logged in" >&2; exit 1
+FAKE
+chmod +x "$QJTMP/fake" "$QJTMP/fail"
+qj() { TMUX_QUICK_JOB_DIR="$QJTMP/jobs" TMUX_QUICK_JOB_CMD="$QJTMP/${QJCMD:-fake}" TMUX_AGENT_NOTIFY=0 "$QJ" "$@"; }
+if command -v python3 >/dev/null 2>&1; then
+  check "tj TASK dispatches and prints an id" "qj what is 2+2 | grep -q '^⚡ '"
+  check "a fresh job reads as running, not lost" "qj | head -1 | grep -q '^⚡'"
+  check "the status line counts it" "qj --status | grep -q '⚡1'"
+  check "tj wait returns the parsed answer" "qj wait | grep -qx 'the answer is 4'"
+  check "the session id is kept for tj resume" "grep -qx s-1 \"\$(ls -d '$QJTMP'/jobs/*/ | head -1)session\""
+  check "reading it clears the unread count" "[ -z \"\$(qj --status)\" ]"
+  QJCMD=fail qj this will fail >/dev/null; sleep 2
+  check "a failed job shows as ✗ with its stderr as output" \
+    "qj | head -1 | grep -q '^✗' && qj show | grep -q 'not logged in'"
+  check "an empty task is refused" "! qj '   ' 2>/dev/null"
+  check "tj --help is the header" "qj --help | grep -q 'prefix + Q'"
+else
+  no "quick jobs need python3 to detach"
+fi
+check "prefix + Q is in the config template" "grep -q 'bind Q .*tmux-quick-job.sh --popup' '$ROOT/tmux/agents.conf.in'"
+rm -rf "$QJTMP"
+
 printf '\ninstaller\n'
 TMPHOME=$(mktemp -d)
 trap 'rm -rf "$TMPHOME"' EXIT

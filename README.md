@@ -287,6 +287,32 @@ Scratch dirs live under `~/.cache`, deliberately not `$TMPDIR`: macOS purges
 out from under it. `~/.cache` survives until something here removes it, which also
 leaves `tq gc` something to find after a crash.
 
+### Quick jobs — `prefix + Q`, `tj`
+
+Most asks don't need an agent you sit with. `prefix + Q` opens a one-line prompt;
+type the task, press enter, and the popup closes. `claude -p` runs it detached in
+that pane's folder, and when it finishes you get a notification carrying the
+first line of the answer. That's the whole interaction.
+
+`prefix + Q` again lists recent jobs, newest first — `⚡` running, `✉` unread,
+`✓` read, `✗` failed. Enter on an empty prompt reads the highlighted one;
+`ctrl-y` copies it. The status line shows `⚡N` while jobs run and `✉N` for
+answers you haven't read.
+
+```bash
+tj what is listening on port 3000     # same thing from a shell, in $PWD
+tj                                    # recent jobs
+tj show [ID]                          # print an answer (no ID: the newest)
+tj wait [ID]                          # block until it's done, then print it
+tj resume ID                          # it needed a conversation after all
+```
+
+A job can't ask you anything, so a tool call your permission mode would have
+prompted for is denied and the agent works around it. It runs under your Claude
+Code `defaultMode`; pass `TMUX_QUICK_JOB_FLAGS="--permission-mode acceptEdits"`
+(or `--model sonnet`, or anything else `claude -p` takes) to change that. Jobs
+live in `~/.local/state/tmux-agents/jobs`, newest 50 kept.
+
 ### The file browser — `prefix + f`
 
 Browse the folder the agent in this pane is working in — one directory at a time,
@@ -465,7 +491,7 @@ than that, and it is worth being straight about which parts:
 |---|---|---|
 | Sessions, `prefix + a`, `prefix + j`, status line, file browser | ✅ | ✅ |
 | Save / restore / sleep / wake / ageing | ✅ | ✅ |
-| Favorites, throwaway agents, the doctor | ✅ | ✅ |
+| Favorites, throwaway agents, quick jobs, the doctor | ✅ | ✅ |
 | Copy to clipboard | `pbcopy` | OSC 52, needs a terminal that supports it |
 | Desktop notifications | `terminal-notifier` / `osascript` | `notify-send` |
 | Open / reveal a file | `open`, Finder | `xdg-open`, no reveal |

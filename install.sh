@@ -194,7 +194,7 @@ if [ "$UNINSTALL" = 1 ]; then
   # Only our own symlinks, and only the ones pointing into THIS clone: a name
   # someone has since pointed at another checkout is not ours to remove.
   BIN_DIR="$HOME/.local/bin"
-  for n in tsleep twake tsnaps tsave trestore tarchive tpower tdoctor tf tlifecycle; do
+  for n in tsleep twake tsnaps tsave trestore tarchive tpower tdoctor tf tlifecycle tj; do
     tgt=$(readlink "$BIN_DIR/$n" 2>/dev/null) || continue
     case "$tgt" in
       "$HOME_DIR"/bin/*)
@@ -377,13 +377,14 @@ if [ "$WITH_CLI" = 1 ]; then
   say "${B}Commands${Z}"
   BIN_DIR="$HOME/.local/bin"
   if [ "$DRY_RUN" = 1 ]; then
-    act "symlink tsleep twake tsnaps tsave trestore tarchive tpower tdoctor tf tlifecycle -> $BIN_DIR"
+    act "symlink tsleep twake tsnaps tsave trestore tarchive tpower tdoctor tf tlifecycle tj -> $BIN_DIR"
   else
     mkdir -p "$BIN_DIR"
     for n in tsleep twake tsnaps tsave trestore tarchive tpower tdoctor tf; do
       link_cli "$BIN_DIR/$n" "$HOME_DIR/bin/tmux-agent-cli.sh"
     done
     link_cli "$BIN_DIR/tlifecycle" "$HOME_DIR/bin/tmux-agent-lifecycle.sh"
+    link_cli "$BIN_DIR/tj" "$HOME_DIR/bin/tmux-quick-job.sh"
     case ":$PATH:" in
       *":$BIN_DIR:"*) ok "$BIN_DIR is on your PATH" ;;
       *) warn "$BIN_DIR is not on your PATH — add it, or the names above won't resolve" ;;

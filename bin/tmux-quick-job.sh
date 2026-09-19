@@ -198,13 +198,27 @@ worker() {
   # refuses to start nested under those.
   unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT
 
+  # ⚠️  The worker inherits the TMUX SERVER's PATH, not your shell's. A server
+  # started weeks ago from another terminal can predate ~/.local/bin being on
+  # PATH, which is where Claude Code's installer puts `claude` — every job then
+  # died with "claude: command not found". So add the places it installs to.
+  PATH="$PATH:$HOME/.local/bin:$HOME/.claude/local:/opt/homebrew/bin:/usr/local/bin"
+  export PATH
+
   # Not word-split into an array on purpose: TMUX_QUICK_JOB_CMD and _FLAGS are
   # user-written strings, "claude" and "--model sonnet", meant to split on spaces.
   cmd="${TMUX_QUICK_JOB_CMD:-claude}"
-  # shellcheck disable=SC2086
-  $cmd -p --output-format json --append-system-prompt "$QUICK_SYSTEM" \
-    ${TMUX_QUICK_JOB_FLAGS:-} "$prompt" > "$d/raw.json" 2> "$d/stderr"
-  code=$?
+  if command -v "${cmd%% *}" >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    $cmd -p --output-format json --append-system-prompt "$QUICK_SYSTEM" \
+      ${TMUX_QUICK_JOB_FLAGS:-} "$prompt" > "$d/raw.json" 2> "$d/stderr"
+    code=$?
+  else
+    printf "can't find '%s' on the tmux server's PATH:\n  %s\nPoint at it with: tmux set-environment -g TMUX_QUICK_JOB_CMD /full/path/to/claude\n" \
+      "${cmd%% *}" "$PATH" > "$d/stderr"
+    : > "$d/raw.json"
+    code=127
+  fi
 
   # The JSON envelope carries the answer and the session id (for `tj resume`).
   # python3 is only here to parse it; without it the raw envelope is the output.
@@ -272,7 +286,9 @@ _announce() {
 _pager() {
   if command -v glow >/dev/null 2>&1; then glow -p "$1"
   elif command -v bat >/dev/null 2>&1; then bat --paging=always --style=plain -l md "$1"
-  else less -R -Ps'q — back to the list' -Pm'q — back to the list' "$1"; fi
+  # -c paints from the top. Without it less scrolls a short answer up from the
+  # bottom of the popup, leaving it under a screenful of blank space.
+  else less -R -c -Ps'q — back to the list' -Pm'q — back to the list' "$1"; fi
 }
 
 # _view ID — the whole of one job, prompt first, then marks it read.

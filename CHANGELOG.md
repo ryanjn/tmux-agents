@@ -2,6 +2,18 @@
 
 Notable changes per release. Dates are the release date, newest first.
 
+## 0.4.1 — 2026-09-19
+
+### Fixed
+
+- **Every quick job failed with `claude: command not found`.** The worker runs
+  with the tmux *server's* PATH, which is frozen from whenever the server started,
+  and can predate `~/.local/bin` (where Claude Code installs) being on PATH. The
+  worker now adds the standard install locations itself, and when `claude` really
+  is missing it says how to point at it.
+- **Results were pinned to the bottom of the popup.** `less` scrolls a short file
+  up from the bottom; it now paints from the top.
+
 ## 0.4.0 — 2026-09-17
 
 **Quick jobs.** Ceremony tax: for the ask that is one question and one answer,

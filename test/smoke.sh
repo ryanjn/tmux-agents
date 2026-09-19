@@ -317,6 +317,9 @@ if command -v python3 >/dev/null 2>&1; then
 else
   no "quick jobs need python3 to detach"
 fi
+check "the worker finds claude off the tmux server's PATH" "grep -q 'HOME/.local/bin' '$QJ'"
+check "a missing agent command is a failure, not a success" \
+  "! grep -q 'code=\\\${code:-' '$QJ' && grep -q 'code=127' '$QJ'"
 check "prefix + Q is in the config template" "grep -q 'bind Q .*tmux-quick-job.sh --popup' '$ROOT/tmux/agents.conf.in'"
 rm -rf "$QJTMP"
 

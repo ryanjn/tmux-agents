@@ -9,7 +9,7 @@ neat to have.
 
 ## Where this is right now
 
-**v0.3.0.** Routing is largely solved: `prefix + j`, waiting times, waiting-first
+**v0.4.2.** Routing is largely solved: `prefix + j`, waiting times, waiting-first
 ordering, desktop notifications. Each agent's row also carries what it is doing to
 the machine (`⚙N` processes) and how much context it is carrying (`736k`), and the
 doctor catches a tmux server that has outlived the terminal which started it.
@@ -17,20 +17,34 @@ doctor catches a tmux server that has outlived the terminal which started it.
 **Reconstruction is now solved too, and out of order** — it was meant to follow the
 board. A reboot no longer costs anything: the server's shape is snapshotted on
 every change and replayed at login, agents sleep and wake on their exact
-conversations, and idle ones age out instead of accumulating. That pulled the
-milestone numbering forward, so the board is **0.4** below, not 0.3.
+conversations, and idle ones age out instead of accumulating.
 
 **v0.3.1 shipped tax zero.** The doctor now checks detection against a second,
 independent signal rather than reporting that it ran; CI runs both suites on
 every push; and `test/integration.sh` drives a real server on its own socket.
-Building it found what it was built to find — two implementations of "is this
-pane an agent" that disagreed, and an rc file that returned non-zero whenever no
-tmux server was running.
 
-**Then the 0.4 board** — one popup, every agent, last few lines each, built from
-`capture-pane` snapshots — with stuck-detection alongside it, since "who is
-wedged" is the question the board exists to answer. Everything else below is
-unstarted.
+**0.4.0–0.4.2 went off the board, twice, and both were right.** Neither was
+planned; both came from using the thing:
+
+- **Quick jobs** (`prefix + Q`, `tj`) — ceremony, from 0.6, arriving early and in a
+  shape the board never had. The premise there was "start an agent faster". This is
+  the older question: *does this need an agent at all?* A one-question ask now runs
+  as a detached `claude -p` and comes back as a notification, with no session, no
+  window and nothing to return to. It removes agents from the fleet rather than
+  adding them faster, which is worth more per line than anything in 0.6.
+- **Grouping in the agent list** — awareness, unplanned. Needs you / Today /
+  Yesterday / This week / Older / Asleep, with waiting pinned above the days.
+  Written after a list of twenty on one screen stopped being readable. It absorbed
+  part of what the board was for: scanning many agents at once.
+
+**Next: "stuck, not thinking"** — the remaining half of routing, and the question
+the board exists to answer. Its inputs are already sampled for every row, so it is
+arithmetic rather than a new source.
+
+**Then reassess the board.** It is still the honest answer to "read the last few
+lines of six agents", but grouping took a bite out of its case and stuck detection
+will take another. Deciding it is still an L *after* those two is cheaper than
+building it before them.
 
 ## The five taxes
 
@@ -56,16 +70,16 @@ anything changed. A tool that says "3 agents idle" when it can no longer see any
 agents has not degraded, it has started lying. Paying this tax means the tool
 fails loudly or not at all.
 
-## Where 0.3.0 lands
+## Where 0.4.2 lands
 
 | Tax | Covered by | Gap |
 |---|---|---|
 | **0 · Trust** | Detection cross-checked against an independent signal, CI on every push, integration tests on a throwaway server | **Handled for the failures we can name.** Residual: a title like `~ /some/path` satisfies both detectors and still reads as an agent — that needs a glyph allowlist, not a shape test |
-| Routing | `prefix + j`, waiting times, waiting-first order, opt-in notifications | Largely handled — but nothing tells you an agent is *stuck* rather than thinking, and that is the expensive half |
+| Routing | `prefix + j`, waiting times, waiting-first order, opt-in notifications | Largely handled — but nothing tells you an agent is *stuck* rather than thinking, and that is the expensive half. **In progress** |
 | Reconstruction | Snapshot/restore, sleep/wake on exact conversations, ageing, `tarchive` | **Largely handled** on one machine. It has no concept of a second one: the snapshot stamps its hostname and nothing ever reads it back |
-| Awareness | The picker list | One agent at a time, only while the popup is open, and no way to search across agents at all |
+| Awareness | The picker list, grouped by when you last saw each agent | Still one agent's screen at a time, only while the popup is open, and no way to search across agents at all |
 | Handoff | `ctrl-y` copies a path | You paste it yourself, into an agent you navigate to yourself |
-| Ceremony | `t NAME`, `ts`, `tq`, `tf`, folder + notes auto-created | **Improved** — favorites and throwaway agents removed most of it. No worktrees, no multi-window profiles |
+| Ceremony | `t NAME`, `ts`, `tq`, `tf`, folder + notes auto-created — and `tj`, which skips the agent entirely | **Largely handled** for the small end. No worktrees, no multi-window profiles |
 
 ---
 
@@ -154,8 +168,9 @@ remains is the board itself and the filter keys.
 | **The board** — one popup, every agent, last few lines each | Replaces "open picker, arrow down, read, arrow down, read" with one glance. The headline feature of this release | L |
 | ~~**Context each agent is carrying**~~ — **shipped 0.2.4**, from Claude Code's transcript, attributed exactly via a hook-recorded path | "Which agent is about to compact, and which can take more work?" Unanswerable before without opening each one | M |
 | ~~**Last-activity time per agent**~~ — **shipped 0.2.1**, from `#{window_activity}`, folded into the same column as waiting time | Distinguishes "thinking" from "wedged 40 minutes ago", which the spinner cannot | S |
-| **Stuck, not thinking** — a distinct glyph for an agent whose context has not grown and whose pane has not changed for N minutes while it still claims to be working | The other half of routing, and the expensive half. `●` today means both "productively grinding" and "wedged since breakfast", and only one of those wants you. The inputs already exist: last-activity from `#{window_activity}`, context tokens from the transcript, both already sampled for every row. This is arithmetic on data we collect, not a new source | M |
-| **Filter keys in the picker** (waiting only / this folder only / stuck only) | Narrows five agents to the two that matter | S |
+| **Stuck, not thinking** — *in progress* — a distinct glyph for an agent whose context has not grown and whose pane has not changed for N minutes while it still claims to be working | The other half of routing, and the expensive half. `●` today means both "productively grinding" and "wedged since breakfast", and only one of those wants you. The inputs already exist: last-activity from `#{window_activity}`, context tokens from the transcript, both already sampled for every row. This is arithmetic on data we collect, not a new source | M |
+| ~~**Group the list by when you last saw each agent**~~ — **shipped 0.4.2**; Needs you / Today / Yesterday / This week / Older / Asleep, in the picker and in `ta`, waiting pinned above the days | Twenty rows on one screen is a list you scan rather than read. Unplanned, and it absorbed part of the board's case | S |
+| **Filter keys in the picker** (waiting only / this folder only / stuck only) | Narrows five agents to the two that matter. Cheaper after stuck detection, which gives the third filter something to filter on | S |
 | **"What is this agent doing to my machine?"** — ~~child processes spawned~~ (**`⚙N` shipped 0.2.1**), and whether it's writing outside its own folder | Added 2026-07-30 after an agent fanned out hundreds of `op item edit` processes across a password vault. The screen preview said "Running 1 shell command"; the only real signal was a storm of macOS permission dialogs. Status tells you an agent is *busy*, never that it's busy doing something with a blast radius | M |
 | ~~**Doctor: warn when the tmux server outlives the app that launched it**~~ — **shipped 0.2.1** | Same day: a server started from iTerm 22 hours earlier meant every macOS permission prompt named a dead app, and no amount of clicking Allow could stick. Nothing surfaced that. `#{pid}` + start time + the stale `TERM_PROGRAM` in the global env is all it takes | S |
 
@@ -197,6 +212,7 @@ here sends an agent instructions on your behalf.
 | **Worktree-backed sessions** — `t --worktree feature/x` creates the git worktree and the agent in it | The clean way to run several agents on one repo without them fighting over the index. Pairs naturally with `ts` | M |
 | **Profiles** — a named session shape (agent + dev server + logs) | Removes the repeated manual setup for the projects you touch weekly | M |
 | **Start an agent with a prompt** — `t NAME "fix the flaky retry test"` | Skips the "type the task in once you arrive" step | S |
+| ~~**Quick jobs**~~ — **shipped 0.4.0**; `prefix + Q` and `tj` run a detached `claude -p` and notify you with the answer | The ask that never needed an agent: no session, no window, nothing to come back to. Arrived ahead of everything else here because it removes agents from the fleet rather than starting them faster | M |
 
 ## 1.0 — Something other people can rely on
 

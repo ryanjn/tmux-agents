@@ -170,6 +170,16 @@ list with your query still typed.
 No fzf? The binding falls back to a dependency-free tmux menu with the same
 actions on `n` / `s` / `x`.
 
+Rows are grouped by when you last saw them: **Needs you**, then **Today**,
+**Yesterday**, **This week**, **Older**, **Asleep**. Twenty agents is too many to
+read as one list, and "which of these did I touch today" is the question you
+arrive with.
+
+⚠️ **Needs you is a group, not a day**, and it stays at the top whatever the
+clock says — filing a `◆` that has waited since Monday under "This week", below
+today's idle rows, would undo the one thing the list is for. Headings are inert:
+enter on one does nothing, and they filter away as soon as you type.
+
 ### More agents in this window — `prefix + A`, `prefix + B`
 
 `prefix + A` splits the current window and starts an agent in the new pane, on the

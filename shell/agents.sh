@@ -23,7 +23,7 @@
 # command, and `t` is a popular alias. Check with `type t` before sourcing, or
 # see the README for how to load only the tmux keybindings.
 
-TMUX_AGENTS_VERSION="0.4.1"
+TMUX_AGENTS_VERSION="0.4.2"
 
 command -v tmux >/dev/null 2>&1 || return 0
 
@@ -1353,6 +1353,9 @@ _t_waited_for() {
 #   9 process count, but only when it's high enough to be worth saying
 #   10 context carried, in tokens ("730k") — or a percentage if you set
 #      TMUX_AGENT_CTX_WINDOW, and empty when it can't be attributed confidently
+#   11 the group this row belongs under: "Needs you", "Today", "Yesterday",
+#      "This week", "Older", "Asleep". Appended LAST so that every consumer that
+#      reads by position keeps working; renderers draw a heading when it changes.
 #
 # Field 8 is "how long has it been like this": time waiting for an agent that's
 # waiting on you, time since it last printed anything otherwise. Both answer the
@@ -1369,6 +1372,16 @@ _t_waited_for() {
 # waiting at the top), then working, then idle, alphabetical within each. A ◆
 # sitting at the bottom of five rows is the routing failure this tool exists to fix.
 #
+# Above that ordering sits a coarser one, by WHEN YOU LAST SAW ACTIVITY: today,
+# yesterday, this week, older. Twenty agents is too many to read as one list, and
+# "which of these did I touch today" is the question you actually arrive with.
+#
+# ⚠️  "Needs you" is a group, not a day, and it stays at the top whatever the
+# dates say. Filing a ◆ that has waited since Monday under "This week" — below
+# today's idle rows — would undo the one thing this list is for. Asleep is a
+# group for the same reason, at the other end: a sleeper has no last-output time
+# (see _t_agent_rows), so it has no day to be filed under.
+#
 # Longest-waiting-first is what keeps the list honest against `prefix + j`, which
 # jumps to exactly that agent: the top row is always the one the key would take
 # you to. Two orderings that disagree would be worse than either alone.
@@ -1384,8 +1397,13 @@ _t_agent_display() {
   [ -n "$rows" ] || return 0
   procs=$(_t_proc_counts)
   ctx=$(printf '%s\n' "$rows" | _t_context_map)
+  # Seconds since local midnight, so "today" means the calendar day you are
+  # having and not "the last 24 hours" — at 09:00 those differ by most of a day.
+  local since_midnight
+  since_midnight=$(( $(date +%-H) * 3600 + $(date +%-M) * 60 + $(date +%-S) ))
   printf '%s\n' "$rows" | awk -F'\t' -v procs="$procs" -v ctx="$ctx" \
-      -v busy="${TMUX_AGENT_BUSY_PROCS:-8}" -v window="${TMUX_AGENT_CTX_WINDOW:-0}" '
+      -v busy="${TMUX_AGENT_BUSY_PROCS:-8}" -v window="${TMUX_AGENT_CTX_WINDOW:-0}" \
+      -v midnight="$since_midnight" '
     # One place to add a state. Anything unknown sorts last rather than vanishing.
     BEGIN {
       rank["waiting"] = 0; rank["working"] = 1; rank["idle"] = 2; rank["running"] = 3
@@ -1407,6 +1425,20 @@ _t_agent_display() {
       if (window + 0 > 0) return int(tok * 100 / window) "%"
       if (tok >= 1000) return int(tok / 1000) "k"
       return tok
+    }
+
+    # group(state, seconds-since-last-activity) -> "RANK LABEL".
+    # Rank leads the sort; the label is printed. Unknown timing on a LIVE agent
+    # reads as today: it is running now, and burying it under "Older" would be a
+    # worse lie than the one the missing timestamp already tells.
+    function group(state, sec) {
+      if (state == "waiting") return "0 Needs you"
+      if (state == "asleep")  return "5 Asleep"
+      if (sec == "")          return "1 Today"
+      if (sec <= midnight)              return "1 Today"
+      if (sec <= midnight + 86400)      return "2 Yesterday"
+      if (sec <= midnight + 7 * 86400)  return "3 This week"
+      return "4 Older"
     }
 
     # Compact on purpose: this column shares a line with the task.
@@ -1437,12 +1469,14 @@ _t_agent_display() {
         # children, a fan-out runs dozens.
         np = (pp[i] in pcount) ? pcount[pp[i]] : 0
         procs_col = (np + 0 >= busy + 0) ? "⚙" np : ""
-        printf "%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-               r, (a[i] == "" ? 0 : a[i]), tolower(label),
+        split(group(st[i], shown), grp, " ")
+        glabel = substr(group(st[i], shown), length(grp[1]) + 2)
+        printf "%d\t%d\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+               grp[1], r, (a[i] == "" ? 0 : a[i]), tolower(label),
                p[i], s[i], c[i], g[i], st[i], label, t[i], age(shown), procs_col,
-               ctxcol(p[i] in ctok ? ctok[p[i]] : "")
+               ctxcol(p[i] in ctok ? ctok[p[i]] : ""), glabel
       }
-    }' | LC_ALL=C sort -t "$(printf '\t')" -k1,1n -k2,2nr -k3,3 | cut -f4-
+    }' | LC_ALL=C sort -t "$(printf '\t')" -k1,1n -k2,2n -k3,3nr -k4,4 | cut -f5-
 }
 
 ta() {
@@ -1453,9 +1487,16 @@ ta() {
   # Everything about "what state is this in" folded into one column. A column of
   # its own would be empty for any agent we can't attribute, and `column -t`
   # collapses empty fields — which slides every later column left on that row.
+  #
+  # The group (field 11) rides along as a leading column so `column -t` can size
+  # the rest as one table; the heading is drawn and the column stripped after.
+  # Sizing the groups separately would step the columns in and out down the page.
   out=$(_t_agent_display | awk -F'\t' '
     { st = $5 ($8 != "" ? " " $8 : "") ($9 != "" ? " " $9 : "") ($10 != "" ? " " $10 : "")
-      printf "%s\t%s\t%s\t%s\n", $4, st, $6, $7 }')
+      gsub(/ /, "\031", $11)    # one token, so the first field is unambiguous
+                                 # (\031, not a Unicode escape: awk outside macOS
+                                 # has no \u, and it silently leaves the literal)
+      printf "%s\t%s\t%s\t%s\t%s\n", $11, $4, st, $6, $7 }')
 
   if [ -t 1 ]; then
     tput home 2>/dev/null
@@ -1463,7 +1504,14 @@ ta() {
   fi
 
   [ -z "$out" ] && { echo "no agents running"; return 1; }
-  printf '%s\n' "$out" | column -t -s '	'
+  printf '%s\n' "$out" | column -t -s '	' | awk '
+    { group = $1; sub(/^[^ ]+ +/, "")
+      gsub(/\031/, " ", group)
+      if (group != seen) {
+        printf "%s%s %s %s%s\n", (NR > 1 ? "\n" : ""), dim, group, rule, off
+        seen = group
+      }
+      print }' dim="$(printf '\033[2m')" off="$(printf '\033[0m')" rule="────────────────"
 }
 
 # ---------------------------------------------------------------------------

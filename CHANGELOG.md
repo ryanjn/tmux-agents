@@ -2,6 +2,17 @@
 
 Notable changes per release. Dates are the release date, newest first.
 
+## 0.4.2 — 2026-09-19
+
+### Added
+
+- **The agent list groups by when you last saw each agent** — Needs you, Today,
+  Yesterday, This week, Older, Asleep — in both `prefix + a` and `ta`. Waiting
+  agents stay pinned at the top whatever their age, because burying a `◆` under
+  a day heading would cost exactly what the list exists to give. Sleepers have no
+  last-output time at all, so they are a group rather than a day.
+- Group headings are inert in the picker: enter on one does nothing.
+
 ## 0.4.1 — 2026-09-19
 
 ### Fixed

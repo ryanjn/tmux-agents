@@ -161,6 +161,47 @@ check "an idle agent shows how long since it last spoke" \
 check "waiting time still wins over silence for a waiting agent" \
   "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_proc_counts() { :; }; _t_agent_display | head -1 | cut -f8 )\" = 1h ]"
 
+printf '\ngrouping by day\n'
+# Seconds since local midnight, the same way _t_agent_display works it out — so
+# "yesterday" here means the calendar day before this one, not 24 hours ago.
+MIDNIGHT=$(( $(date +%-H) * 3600 + $(date +%-M) * 60 + $(date +%-S) ))
+GSTUB="
+_t_agent_rows() {
+  printf '●\tworking\t%%1\t@1\tnow\tc\t/tmp\tt\t\t30\t201\n'
+  printf '○\tidle\t%%2\t@2\tyesterday\tc\t/tmp\tt\t\t$((MIDNIGHT + 3600))\t202\n'
+  printf '○\tidle\t%%3\t@3\tmidweek\tc\t/tmp\tt\t\t$((MIDNIGHT + 3 * 86400))\t203\n'
+  printf '○\tidle\t%%4\t@4\tancient\tc\t/tmp\tt\t\t$((MIDNIGHT + 30 * 86400))\t204\n'
+  printf '☾\tasleep\t%%5\t@5\tsleeper\tc\t/tmp\tt\t\t\t\n'
+  printf '◆\twaiting\t%%6\t@6\tstale\tc\t/tmp\tt\t$((MIDNIGHT + 4 * 86400))\t9\t206\n'
+}
+_t_proc_counts() { :; }"
+groups() { ( . "$ROOT/shell/agents.sh"; eval "$GSTUB"; _t_agent_display | cut -f11 | tr '\n' '|' ); }
+labels() { ( . "$ROOT/shell/agents.sh"; eval "$GSTUB"; _t_agent_display | cut -f6 | tr '\n' '|' ); }
+
+check "groups run needs-you, today, yesterday, this week, older, asleep" \
+  "[ \"\$(groups)\" = 'Needs you|Today|Yesterday|This week|Older|Asleep|' ]"
+check "an agent waiting since last week still sorts to the top" \
+  "[ \"\$(labels | cut -d'|' -f1)\" = stale ]"
+check "a sleeper is its own group, not a day" \
+  "[ \"\$(labels | cut -d'|' -f6)\" = sleeper ]"
+check "the group is column 11, leaving every earlier column where it was" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$GSTUB\"; _t_agent_display | head -1 | cut -f5 )\" = waiting ]"
+check "ta draws a heading per group" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$GSTUB\"; ta | grep -c 'Needs you\|Today\|Yesterday\|This week\|Older\|Asleep' )\" = 6 ]"
+check "ta's own columns still line up under the headings" \
+  "( . '$ROOT/shell/agents.sh'; eval \"\$GSTUB\"; ta | grep -q '^◆  waiting' )"
+# The picker re-sources the helpers in its own process, so a stub here can't
+# reach it. Feed its heading awk the stubbed rows directly instead — same
+# program, extracted from the script so the two can't drift.
+PICKAWK=$(sed -n "/\\\$11 != seen/,/\\\$7 }'/p" "$ROOT/bin/tmux-agent-picker.sh" | sed "s/}'\$/}/")
+check "the picker emits one heading per group, with an empty pane id" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$GSTUB\"; _t_agent_display |
+       awk -F'\t' -v dim= -v off= \"\$PICKAWK\" | awk -F'\t' '\$1 == \"\" { n++ } END { print n+0 }' )\" = 6 ]"
+check "the picker reopens rather than exiting when a heading is chosen" \
+  "grep -q 'can only be a' '$ROOT/bin/tmux-agent-picker.sh'"
+check "no Unicode escapes in awk — they are not portable" \
+  "! grep -n 'gsub(.*\\\\\\\\u00' '$ROOT/shell/agents.sh'"
+
 printf '\ncontext usage\n'
 CTXHOME=$(mktemp -d); mkdir -p "$CTXHOME/.cache/tmux-agent-status"
 # A transcript shaped like Claude Code's: the last non-sidechain assistant turn is

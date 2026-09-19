@@ -67,10 +67,20 @@ fi
 # The age column sits between the glyph and the name, padded even when empty, so
 # the name column stays put whether or not anything is waiting. Waiting-first
 # ordering comes from _t_agent_display and fzf preserves it for an empty query.
+# Group headings (field 11 — "Needs you", "Today", "Yesterday", …) are emitted as
+# rows with an EMPTY pane id. Every action here already guards on that, because a
+# selection with no pane is also what cancelling looks like; enter on one does
+# nothing at all (see the transform bind below). fzf has no notion of an
+# unselectable row, and a heading that filters away when you type is the right
+# behaviour anyway: once you are searching, days are noise.
 _list() {
   _t_agent_display |
-    awk -F'\t' '{ printf "%s\t%s\t%s\t%s %-4s %-5s %-30s %s%s\n",
-                   $1, $2, $3, $4, $8, $10, $6, ($9 != "" ? $9 "  " : ""), $7 }'
+    awk -F'\t' -v dim="$(printf '\033[2m')" -v off="$(printf '\033[0m')" '
+      $11 != seen { seen = $11
+                    rule = "────────────────────────────────────────"
+                    printf "\t\t\t%s── %s %s%s\n", dim, $11, substr(rule, 1, 46 - length($11) * 2), off }
+      { printf "%s\t%s\t%s\t%s %-4s %-5s %-30s %s%s\n",
+               $1, $2, $3, $4, $8, $10, $6, ($9 != "" ? $9 "  " : ""), $7 }'
 }
 
 # ---------------------------------------------------------------------------
@@ -170,6 +180,7 @@ _pick_new_name() {
     return 0
   fi
 
+
   out=$(
     printf '%s\n' "$rows" | fzf \
       --delimiter=$'\t' \
@@ -249,10 +260,28 @@ while :; do
   # selected row is line 3. Verified against fzf 0.74: on esc you get the query
   # plus an empty key line and no third line; on a key with no matches you get the
   # key and no third line.
+  # Enter on a group heading should do nothing at all. fzf has no unselectable
+  # row, but `transform` can turn the keypress into "ignore" when the row carries
+  # no pane id. It arrived in fzf 0.45; on anything older the bind is left off and
+  # the guard after the loop catches it instead — one reopen of the list rather
+  # than a silent no-op.
+  #
+  # ⚠️  `{1}` is UNQUOTED on purpose. fzf shell-quotes every placeholder, so an
+  # empty field becomes '' — and inside double quotes that is two literal quote
+  # characters, i.e. non-empty. `[ -n "{1}" ]` was therefore true for headings
+  # and enter jumped into them anyway.
+  heading_bind=()
+  case "$(fzf --version 2>/dev/null | cut -d' ' -f1)" in
+    0.[0-9]|0.[0-3][0-9]|0.4[0-4]|"") ;;
+    *) heading_bind=(--bind 'enter:transform:[ -n {1} ] && echo accept || echo ignore') ;;
+  esac
+
   out=$(
     printf '%s\n' "$rows" | fzf \
       --delimiter=$'\t' \
       --with-nth=4.. \
+      --ansi \
+      "${heading_bind[@]}" \
       --print-query \
       --expect=ctrl-n,ctrl-s,ctrl-v,ctrl-g,ctrl-x,ctrl-t,ctrl-f,ctrl-o \
       --preview "$0 --preview {1} {3}" \
@@ -393,7 +422,11 @@ while :; do
   esac
 
   # Plain enter: jump to it. fzf exits non-zero on esc, so an empty selection here
-  # just means "cancelled".
-  [ -n "$pane" ] || exit 0
+  # means "cancelled" — unless something WAS selected, which then can only be a
+  # group heading. That is a misclick, not a cancel, so go back to the list.
+  if [ -z "$pane" ]; then
+    [ -n "$sel" ] && continue
+    exit 0
+  fi
   exec "$DO" focus "$pane"
 done

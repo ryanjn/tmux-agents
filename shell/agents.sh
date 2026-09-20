@@ -23,7 +23,7 @@
 # command, and `t` is a popular alias. Check with `type t` before sourcing, or
 # see the README for how to load only the tmux keybindings.
 
-TMUX_AGENTS_VERSION="0.4.2"
+TMUX_AGENTS_VERSION="0.4.3"
 
 command -v tmux >/dev/null 2>&1 || return 0
 
@@ -424,7 +424,7 @@ FAVORITES           the agents you start often, in ~/.config/tmux-agents/favorit
 
 AGENTS
   ta                   every agent: live status, context used, and its task
-                       ● working  ○ idle  ◆ waiting on you  ☾ asleep  ◇ other CLI
+                       ● working  ⊘ stuck  ○ idle  ◆ waiting on you  ☾ asleep  ◇ other CLI
   ts [NAME]            a second agent beside this one, same folder
   ts -s [NAME]         the same, but split into this window
 
@@ -479,6 +479,7 @@ KNOBS               environment, set before the shell sources these
   TMUX_AGENT_EXTRA_PROCS   other agent CLIs to recognise by process name ("aider codex")
   T_AGENT_LAYOUT       layout for shared windows (even-horizontal, tiled, …, none)
   TMUX_AGENT_CTX_WINDOW    context size, if you want ta to show % rather than tokens
+  TMUX_AGENT_STUCK_MINS    silent this long while "working" = ⊘ stuck (10; 0 off)
   TMUX_AGENT_SLEEP_HOURS / _SHUTDOWN_HOURS / _BATTERY_SLEEP_PCT      48 / 168 / 10
   tmux set -g @agent-notify 1     desktop notification when an agent waits on you
 
@@ -1041,7 +1042,13 @@ _t_agent_rows() {
           # A tool publishing ◆ itself, with no marker file to date it.
           "◆") _t_row ◆ waiting "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" \
                  "$(_t_waited_for "$waitdir/${pane#%}.waiting")" "$silent" "$pid" ;;
-          *)   _t_row ● working "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" "" "$silent" "$pid" ;;
+          # Any other glyph is Claude Code's spinner: the agent is running. Whether
+          # it is getting anywhere is a separate question — see _t_stuck.
+          *)   if _t_stuck "$pane" "$cwd" "$silent"; then
+                 _t_row ⊘ stuck "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" "" "$silent" "$pid"
+               else
+                 _t_row ● working "$pane" "$win" "$s" "$wname" "$cwd" "${title#* }" "" "$silent" "$pid"
+               fi ;;
         esac
         continue
       fi
@@ -1103,8 +1110,12 @@ _t_row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@"; }
 # ⚠️  Reads Claude Code's on-disk transcript, which is not a public interface. It
 # is therefore written to fail closed: anything unexpected yields an empty string
 # and the column simply disappears.
-_t_context_tokens() {
-  local pane="$1" cwd="$2" marker f dir n cache mtime cached_mtime cached_tokens tokens
+# _t_transcript_path PANE CWD — the transcript file that belongs to this agent,
+# or nothing. Two readers depend on it: how much context the agent carries, and
+# whether it has written anything lately (_t_stuck). One route, so the two can
+# never disagree about which conversation they are describing.
+_t_transcript_path() {
+  local pane="$1" cwd="$2" marker f dir
 
   # Exact route: the hook records which transcript belongs to which pane. Two
   # agents sharing a folder (a `ts` sibling) can only be told apart this way.
@@ -1127,7 +1138,13 @@ _t_context_tokens() {
     # only place that knows how many *live agents* share a cwd.
     f=$(ls -t "$dir"/*.jsonl 2>/dev/null | head -1)
   fi
-  [ -n "$f" ] && [ -f "$f" ] || return 0
+  [ -n "$f" ] && [ -f "$f" ] && printf '%s' "$f"
+}
+
+_t_context_tokens() {
+  local pane="$1" cwd="$2" f n cache mtime cached_mtime cached_tokens tokens
+  f=$(_t_transcript_path "$pane" "$cwd")
+  [ -n "$f" ] || return 0
 
   # Cached against the transcript's mtime. These files reach tens of megabytes and
   # this runs for every agent on every refresh; without the cache a six-agent
@@ -1333,6 +1350,49 @@ _t_tcc_stale() {
     }'
 }
 
+# _t_stuck PANE CWD SILENT — is this agent wedged rather than thinking?
+# Exit 0 for stuck. Off with TMUX_AGENT_STUCK_MINS=0.
+#
+# `●` today means two different things: productively grinding, and hung since
+# breakfast. Only one of them wants you, and the spinner cannot tell them apart —
+# it animates from a timer, not from progress.
+#
+# Two independent signals, and BOTH must say nothing is happening:
+#
+#   1. the pane has produced no output for N minutes (#{window_activity}).
+#      Claude Code repaints its spinner and elapsed-time counter every second
+#      while it works, and prints a line for every tool call, so a genuinely
+#      working agent is never silent for minutes.
+#   2. its transcript has not been appended to for N minutes. That is the agent
+#      writing to disk rather than to a screen, which covers the case a silent
+#      pane cannot: a long tool call whose output has not come back yet.
+#
+# ⚠️  Requiring both is the whole design, not caution. Either one alone is a
+# guess: a pane can be silent while the agent is mid-write, and a transcript can
+# be idle while a tool streams to the screen. A "stuck" badge that fires on a
+# working agent is a tax-zero failure — it teaches you to distrust the column,
+# and after that the column may as well not exist.
+#
+# When the transcript cannot be found at all, signal 2 is unavailable and this
+# says nothing rather than guessing from silence alone.
+_t_stuck() {
+  local pane="$1" cwd="$2" silent="$3" mins secs f m
+  mins="${TMUX_AGENT_STUCK_MINS:-10}"
+  case "$mins" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$mins" -gt 0 ] || return 1
+  secs=$(( mins * 60 ))
+
+  case "${silent:-}" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$silent" -ge "$secs" ] || return 1
+
+  f=$(_t_transcript_path "$pane" "$cwd")
+  [ -n "$f" ] || return 1
+  m=$(stat -f %m "$f" 2>/dev/null) || m=$(stat -c %Y "$f" 2>/dev/null) || return 1
+  case "$m" in ''|*[!0-9]*) return 1 ;; esac
+  [ -n "${_T_NOW:-}" ] || return 1
+  [ $(( _T_NOW - m )) -ge "$secs" ]
+}
+
 # _t_waited_for FILE — seconds since FILE was last written; empty if it's not
 # there. The waiting marker is written once, when the agent starts waiting, so its
 # mtime is the timestamp and there's nothing extra to record.
@@ -1406,10 +1466,13 @@ _t_agent_display() {
       -v midnight="$since_midnight" '
     # One place to add a state. Anything unknown sorts last rather than vanishing.
     BEGIN {
-      rank["waiting"] = 0; rank["working"] = 1; rank["idle"] = 2; rank["running"] = 3
+      # Stuck sits directly under waiting: it wants you too, it just has not
+      # worked out how to ask.
+      rank["waiting"] = 0; rank["stuck"] = 1; rank["working"] = 2; rank["idle"] = 3
+      rank["running"] = 4
       # Asleep sorts below every live state: it is the one thing on the list that
       # is definitively not waiting on you.
-      rank["asleep"] = 4
+      rank["asleep"] = 5
       # k, not n: n is the per-session row counter further down, and awk will not
       # let you use a name as both a scalar and an array.
       k = split(procs, P, " ")
@@ -1432,7 +1495,7 @@ _t_agent_display() {
     # reads as today: it is running now, and burying it under "Older" would be a
     # worse lie than the one the missing timestamp already tells.
     function group(state, sec) {
-      if (state == "waiting") return "0 Needs you"
+      if (state == "waiting" || state == "stuck") return "0 Needs you"
       if (state == "asleep")  return "5 Asleep"
       if (sec == "")          return "1 Today"
       if (sec <= midnight)              return "1 Today"

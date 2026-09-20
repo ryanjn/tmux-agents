@@ -161,6 +161,57 @@ check "an idle agent shows how long since it last spoke" \
 check "waiting time still wins over silence for a waiting agent" \
   "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$STUB\"; _t_proc_counts() { :; }; _t_agent_display | head -1 | cut -f8 )\" = 1h ]"
 
+printf '\nstuck, not thinking\n'
+STHOME=$(mktemp -d); mkdir -p "$STHOME/.cache/tmux-agent-status"
+STT="$STHOME/t.jsonl"; printf '{}\n' > "$STT"
+printf '%s\n' "$STT" > "$STHOME/.cache/tmux-agent-status/700.transcript"
+# _t_stuck reads the sweep's clock, so the test sets it the way _t_agent_rows does.
+stuck() { ( . "$ROOT/shell/agents.sh"; HOME="$STHOME" _T_NOW=$(date +%s) TMUX_AGENT_STUCK_MINS="${MINS:-10}" \
+            _t_stuck %700 /nowhere "$1" && echo stuck || echo fine ); }
+
+check "a silent pane AND an idle transcript is stuck" \
+  "touch -t 202001010000 '$STT'; [ \"\$(stuck 3600)\" = stuck ]"
+check "a silent pane with a LIVE transcript is not stuck (it is mid-tool-call)" \
+  "touch '$STT'; [ \"\$(stuck 3600)\" = fine ]"
+check "a chatty pane with an idle transcript is not stuck" \
+  "touch -t 202001010000 '$STT'; [ \"\$(stuck 5)\" = fine ]"
+check "no transcript means no claim either way" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; HOME='$STHOME' _T_NOW=\$(date +%s) _t_stuck %999 /nowhere 99999 && echo stuck || echo fine )\" = fine ]"
+check "TMUX_AGENT_STUCK_MINS=0 turns it off" \
+  "touch -t 202001010000 '$STT'; [ \"\$(MINS=0 stuck 3600)\" = fine ]"
+check "a junk threshold is off, not a crash" \
+  "[ \"\$(MINS=soon stuck 3600)\" = fine ]"
+check "a pane with no activity timestamp is never stuck" \
+  "[ \"\$(stuck '')\" = fine ]"
+rm -rf "$STHOME"
+
+# Ordering and presentation: stuck is second only to waiting, and it is in the
+# group that means "deal with me", not in a day.
+SSTUB='
+_t_agent_rows() {
+  printf "○\tidle\t%%1\t@1\tzeta\tc\t/tmp\tt\t\t30\t101\n"
+  printf "⊘\tstuck\t%%2\t@2\twedged\tc\t/tmp\tt\t\t2400\t102\n"
+  printf "●\tworking\t%%3\t@3\tbusy\tc\t/tmp\tt\t\t5\t103\n"
+  printf "◆\twaiting\t%%4\t@4\tasked\tc\t/tmp\tt\t60\t60\t104\n"
+}
+_t_proc_counts() { :; }'
+check "stuck sorts under waiting and above working" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$SSTUB\"; _t_agent_display | cut -f5 | tr '\n' ' ' )\" = 'waiting stuck working idle ' ]"
+check "stuck is filed under Needs you, not under a day" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$SSTUB\"; _t_agent_display | sed -n 2p | cut -f11 )\" = 'Needs you' ]"
+# The status line script re-sources the helpers in its own process, so it gets a
+# checkout whose helpers are the stub — the same door the real one comes through.
+STATHOME=$(mktemp -d); mkdir -p "$STATHOME/shell" "$STATHOME/bin" "$STATHOME/jobs"
+cp "$ROOT/bin/tmux-agent-status.sh" "$ROOT/bin/tmux-quick-job.sh" "$STATHOME/bin/"
+printf '%s\n' '_t_agent_rows() { printf "⊘\tstuck\t%%1\n◆\twaiting\t%%2\n●\tworking\t%%3\n"; }' > "$STATHOME/shell/agents.sh"
+STATOUT=$(TMUX_AGENTS_HOME="$STATHOME" TMUX_QUICK_JOB_DIR="$STATHOME/jobs" "$STATHOME/bin/tmux-agent-status.sh" 2>/dev/null)
+check "the status line counts stuck separately" "printf '%s' \"$STATOUT\" | grep -q '⊘1'"
+check "it is red, and next to the waiting count rather than the working one" \
+  "printf '%s' \"$STATOUT\" | grep -q 'colour214,bold]◆1#\[none\] #\[fg=colour203,bold]⊘1'"
+rm -rf "$STATHOME"
+check "the transcript lookup is shared, not duplicated" \
+  "[ \"\$(grep -c 'claude/projects' '$ROOT/shell/agents.sh')\" = 1 ]"
+
 printf '\ngrouping by day\n'
 # Seconds since local midnight, the same way _t_agent_display works it out — so
 # "yesterday" here means the calendar day before this one, not 24 hours ago.

@@ -2,6 +2,27 @@
 
 Notable changes per release. Dates are the release date, newest first.
 
+## 0.4.3 — 2026-09-19
+
+**Stuck, not thinking** — the other half of routing, and the expensive half.
+
+### Added
+
+- **`⊘` for an agent that claims to be working while nothing moves.** Flagged
+  only when the pane has printed nothing *and* its transcript has not grown for
+  `TMUX_AGENT_STUCK_MINS` (10; `0` disables). Requiring both signals is the
+  design: either alone fires on healthy agents, and a badge that cries wolf costs
+  more than the badge is worth.
+- Stuck agents sort under waiting, in the same **Needs you** group, and get their
+  own red count in the status line.
+- **`prefix + j` stops reporting a false all-clear.** With nobody waiting but
+  something wedged, it says so rather than "no agent is waiting on you".
+
+### Changed
+
+- The transcript lookup that context tokens use is now shared with stuck
+  detection, so the two can never disagree about which conversation they describe.
+
 ## 0.4.2 — 2026-09-19
 
 ### Added

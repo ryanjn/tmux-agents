@@ -20,7 +20,7 @@ runs in a terminal.
  ▌ ○  web:claude2     Auditing the bundle    │   6    for (let i = 0; …
 ```
 
-`◆` needs you · `●` working · `○` idle
+`◆` needs you · `⊘` stuck · `●` working · `○` idle
 
 ![Every agent and what it is doing, favorites, and what a snapshot holds](docs/demo/tour.gif)
 
@@ -179,6 +179,32 @@ arrive with.
 clock says — filing a `◆` that has waited since Monday under "This week", below
 today's idle rows, would undo the one thing the list is for. Headings are inert:
 enter on one does nothing, and they filter away as soon as you type.
+
+### Stuck, not thinking — `⊘`
+
+`●` used to mean two different things: grinding away, and wedged since breakfast.
+Only one of them wants you, and the spinner cannot tell you which — it animates
+from a timer, not from progress.
+
+An agent is flagged `⊘` when **two independent signals** both say nothing is
+happening for `TMUX_AGENT_STUCK_MINS` (10 by default):
+
+1. **the pane has printed nothing.** Claude Code repaints its spinner and elapsed
+   counter every second and prints a line per tool call, so minutes of silence is
+   already anomalous;
+2. **its transcript has not grown.** That is the agent writing to disk rather than
+   to your screen — it covers the case silence alone cannot, a long tool call
+   whose output has not come back yet.
+
+⚠️ **Both, or it says nothing.** Either signal alone is a guess, and a `⊘` on a
+healthy agent teaches you to distrust the column — after which the column may as
+well not exist. When the transcript cannot be found at all, the second signal is
+unavailable and no claim is made.
+
+Stuck agents sort directly under waiting ones, in the same **Needs you** group,
+and are counted separately in the status line (`◆2 ⊘1 ●3 ○4`). `prefix + j` still
+jumps only to agents that actually asked you something — but when none have, it
+tells you how many look stuck instead of reporting an all-clear.
 
 ### More agents in this window — `prefix + A`, `prefix + B`
 
@@ -414,6 +440,7 @@ Set these before the helpers are sourced (i.e. above the marker block in your rc
 | `TMUX_AGENT_NOTIFY` | *(off)* | `1` sends a desktop notification the moment an agent starts waiting. Prefer `tmux set -g @agent-notify 1`, which applies to agents already running |
 | `TMUX_AGENT_NOTIFY_CMD` | *(auto)* | Your own notifier, called as `CMD TITLE MESSAGE`. Otherwise terminal-notifier, osascript, or notify-send |
 | `TMUX_AGENT_BUSY_PROCS` | `8` | How many processes an agent must have spawned before it's flagged `⚙N` |
+| `TMUX_AGENT_STUCK_MINS` | `10` | Minutes of *both* pane silence and transcript silence before a working agent is flagged `⊘` stuck. `0` turns it off |
 | `TMUX_AGENT_CTX_WINDOW` | *(off)* | Your context window in tokens. Set it and context shows as `73%` instead of `736k` |
 | `T_AGENT_LAYOUT` | `tiled` | Layout for windows holding several agents (`even-horizontal`, `tiled`, …, or `none` to leave it alone) |
 | `TMUX_AGENT_SLEEP_HOURS` | `48` | Idle hours before the hourly sweep sleeps an agent |

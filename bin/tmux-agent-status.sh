@@ -19,6 +19,7 @@ rows=$(_t_agent_rows)
 [ -n "$rows" ] || exit 0
 
 working=0
+stuck=0
 idle=0
 waiting=0
 running=0
@@ -26,6 +27,7 @@ asleep=0
 while IFS=$'\t' read -r glyph status rest; do
   case "${status:-}" in
     working) working=$((working + 1)) ;;
+    stuck)   stuck=$((stuck + 1)) ;;       # claims to be working; nothing is moving
     idle)    idle=$((idle + 1)) ;;
     waiting) waiting=$((waiting + 1)) ;;
     running) running=$((running + 1)) ;;   # alive, but state unknown
@@ -37,6 +39,9 @@ done <<< "$rows"
 # leads. Working is green, idle deliberately dim.
 out=""
 [ "$waiting" -gt 0 ] && out="$out$(printf '#[fg=colour214,bold]◆%d#[none] ' "$waiting")"
+# Red, and beside the waiting count rather than the working one: a wedged agent
+# is a thing to deal with, not a thing in progress.
+[ "$stuck" -gt 0 ] && out="$out$(printf '#[fg=colour203,bold]⊘%d#[none] ' "$stuck")"
 out="$out$(printf '#[fg=colour41]●%d #[fg=colour244]○%d' "$working" "$idle")"
 [ "$running" -gt 0 ] && out="$out$(printf ' #[fg=colour109]◇%d' "$running")"
 # Dimmest of all: asleep agents cost nothing and want nothing. Worth a number

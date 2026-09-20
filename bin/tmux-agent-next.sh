@@ -42,8 +42,15 @@ export TMUX_AGENT_CLIENT="${1:-}"
 rows=$(_t_agent_rows | awk -F'\t' '$2 == "waiting" { print ($9 == "" ? 0 : $9) "\t" $3 }')
 
 if [ -z "$rows" ]; then
-  # Not an error — it's the answer. Nobody needs you.
-  tmux display-message "no agent is waiting on you"
+  # Not an error — it's the answer. Nobody needs you. Except that "waiting" only
+  # counts agents that managed to ASK; a wedged one never got that far, so it is
+  # named here rather than left to be discovered an hour later.
+  stuck=$(_t_agent_rows | awk -F'\t' '$2 == "stuck"' | wc -l | tr -d ' ')
+  if [ "${stuck:-0}" -gt 0 ]; then
+    tmux display-message "no agent is waiting on you — but $stuck look stuck (prefix + a)"
+  else
+    tmux display-message "no agent is waiting on you"
+  fi
   exit 0
 fi
 

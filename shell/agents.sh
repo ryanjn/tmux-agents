@@ -1459,8 +1459,14 @@ _t_agent_display() {
   ctx=$(printf '%s\n' "$rows" | _t_context_map)
   # Seconds since local midnight, so "today" means the calendar day you are
   # having and not "the last 24 hours" — at 09:00 those differ by most of a day.
-  local since_midnight
-  since_midnight=$(( $(date +%-H) * 3600 + $(date +%-M) * 60 + $(date +%-S) ))
+  #
+  # ⚠️  Overridable because it makes every row's group a function of WHEN THE
+  # TEST RAN. CI found this the honest way: at 00:01 UTC "two hours ago" is
+  # yesterday, so two order-sensitive tests that passed all evening failed on the
+  # push. Tests pin it; nothing else sets it.
+  local since_midnight="${_T_TODAY_SECS:-}"
+  [ -n "$since_midnight" ] ||
+    since_midnight=$(( $(date +%-H) * 3600 + $(date +%-M) * 60 + $(date +%-S) ))
   printf '%s\n' "$rows" | awk -F'\t' -v procs="$procs" -v ctx="$ctx" \
       -v busy="${TMUX_AGENT_BUSY_PROCS:-8}" -v window="${TMUX_AGENT_CTX_WINDOW:-0}" \
       -v midnight="$since_midnight" '

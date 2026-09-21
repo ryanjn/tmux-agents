@@ -23,7 +23,7 @@
 # command, and `t` is a popular alias. Check with `type t` before sourcing, or
 # see the README for how to load only the tmux keybindings.
 
-TMUX_AGENTS_VERSION="0.4.3"
+TMUX_AGENTS_VERSION="0.4.4"
 
 command -v tmux >/dev/null 2>&1 || return 0
 
@@ -405,6 +405,7 @@ QUICK JOBS          ask, walk away, read the answer — no agent to babysit
   tj TASK...           run `claude -p` on it, detached, in this folder
   tj                   recent jobs: ⚡ running  ✉ unread  ✓ read  ✗ failed
   tj show [ID]         print an answer (no ID: the newest)   tj wait [ID]   block for it
+  tj reply [ID] TEXT   follow up — same conversation, still in the background
   tj resume ID         carry on as an interactive agent      tj rm ID|--all
                        TMUX_QUICK_JOB_FLAGS="--model sonnet" etc. passes flags to claude
 
@@ -459,7 +460,8 @@ KEYS, INSIDE TMUX
                        ctrl-o sleep/wake   ctrl-x kill   ctrl-f files   ctrl-r refresh
   Ctrl+b j             jump to whoever has waited on you longest
   Ctrl+b F             favorites — enter starts one
-  Ctrl+b Q             quick job: type a task, enter, done — empty enter reads results
+  Ctrl+b Q             quick job: type a task, enter, done — empty enter reads results,
+                       then type a follow-up under the answer (or: type, ctrl-f)
   Ctrl+b f             the files this agent is working on — enter opens, ctrl-l Quick
                        Look, ctrl-f Finder, ctrl-y copy path, ctrl-e $EDITOR, ctrl-a recurse
   Ctrl+b A / B         split an agent in here / send this one back

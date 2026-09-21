@@ -5,6 +5,7 @@
 #   tj "TASK"                   the same from any shell (runs in $PWD)
 #   tj                          recent jobs            tj show [ID]   print an output
 #   tj log [ID]                 its stderr             tj rm ID|--all  forget jobs
+#   tj reply [ID] TEXT          follow up on a job (no ID: the newest)
 #
 # A quick job is `claude -p` run detached until it finishes. No session, no
 # window, nothing to babysit: when it is done you get a notification carrying the
@@ -14,12 +15,17 @@
 # It is the other end of the scale from `tq`. `tq` is a throwaway *interactive*
 # agent you still have to sit with; a quick job is a question you throw over the
 # wall. Anything that turns out to need a conversation can be picked up again:
-# every job keeps its session id, and `tj resume ID` opens it as a real agent.
+# every job keeps its session id, so a follow-up (`tj reply`, or typing under an
+# answer you have just read) runs as ANOTHER quick job on the same conversation —
+# still detached, still just the answer back. `tj resume ID` opens it as a real
+# agent instead, for when it needs sitting with.
 #
 # Where jobs live: $TMUX_QUICK_JOB_DIR (default ~/.local/state/tmux-agents/jobs),
 # one directory each —
 #
 #   prompt  cwd  started  pid       written at dispatch
+#   parent  resume                  a follow-up: the job it replies to, and the
+#                                   session it continues
 #   output.md  stderr  session      written as it finishes
 #   exit  finished                  "exit" existing is what makes a job done
 #   seen                            you have read it (clears the ✉ count)
@@ -119,7 +125,8 @@ _row() {
   st=$(_state "$d")
   [ -f "$d/seen" ] && seen=1 || seen=0
   started=$(cat "$d/started" 2>/dev/null || echo 0)
-  prompt=$(tr '\n' ' ' < "$d/prompt" | cut -c1-70)
+  prompt=$(tr '\n' ' ' < "$d/prompt" | cut -c1-68)
+  [ -f "$d/parent" ] && prompt="↳ $prompt"
   where=$(basename "$(cat "$d/cwd" 2>/dev/null)")
   printf '%s\t%s %4s  %-70s  %s\n' "$id" "$(_glyph "$st" "$seen")" "$(_age "$started")" "$prompt" "$where"
 }
@@ -162,10 +169,21 @@ print(pid)
 ' "$@" </dev/null 2>/dev/null
 }
 
-# dispatch DIR PROMPT — make the job dir, start the worker, print the id.
+# dispatch DIR PROMPT [PARENT] — make the job dir, start the worker, print the id.
+# With PARENT it is a follow-up: it continues that job's conversation.
 dispatch() {
-  local cwd="$1" prompt="$2" id d
+  local cwd="$1" prompt="$2" parent="${3:-}" id d sid
   [ -n "${prompt//[[:space:]]/}" ] || die "nothing to do — give it a task"
+  if [ -n "$parent" ]; then
+    [ -d "$JOBS/$parent" ] || die "no job '$parent' to follow up on"
+    [ "$(_state "$JOBS/$parent")" != running ] || die "$parent is still running — follow up once it answers"
+    sid=$(cat "$JOBS/$parent/session" 2>/dev/null)
+    [ -n "$sid" ] || die "$parent has no conversation to continue (it failed before starting one)"
+    # ⚠️  The PARENT's folder, never the one you are in now. Claude Code files a
+    # session under the directory it ran in, and --resume only finds it from
+    # there: follow up from anywhere else and it answers "No conversation found".
+    cwd=$(cat "$JOBS/$parent/cwd")
+  fi
   [ -d "$cwd" ] || cwd="$HOME"
   id="$(date +%m%d-%H%M%S)-$$"
   d="$JOBS/$id"
@@ -173,6 +191,10 @@ dispatch() {
   printf '%s\n' "$prompt" > "$d/prompt"
   printf '%s\n' "$cwd" > "$d/cwd"
   date +%s > "$d/started"
+  if [ -n "$parent" ]; then
+    printf '%s\n' "$parent" > "$d/parent"
+    printf '%s\n' "$sid" > "$d/resume"
+  fi
   # Recorded here as well as by the worker: until the worker gets that far the
   # job would read as "lost".
   _detach "$SELF" --worker "$d" > "$d/pid" || die "can't start the job (needs python3)"
@@ -186,11 +208,16 @@ dispatch() {
 # The system prompt addition is what makes the output worth reading cold: the
 # person asking is not watching, can't answer a question, and will read only the
 # final message.
-QUICK_SYSTEM="You are running as a quick background job. The user typed one request and walked away: they cannot see your progress and cannot answer questions. Do the task fully without asking for confirmation. If something is ambiguous, pick the most reasonable reading and say which you chose. Your final message is the ONLY thing the user will read, so make it the complete answer: lead with the result, be concise, and use plain markdown."
+#
+# It may end with ONE question, now that the user can reply. Not more: a job that
+# answers with a questionnaire has made you do its work. The default is still to
+# pick a reading and go, because most ambiguity is not worth a round trip.
+QUICK_SYSTEM="You are running as a quick background job. The user typed one request and walked away: they cannot see your progress, and will read only your final message. Do the task fully without asking for confirmation. If something is ambiguous, pick the most reasonable reading, do it, and say which reading you chose. Only if you genuinely cannot proceed without information you do not have, end with one short, specific question; the user can reply and you will continue from here. Your final message is the ONLY thing the user will read, so make it the complete answer: lead with the result, be concise, and use plain markdown."
 
 worker() {
-  local d="$1" cwd prompt cmd code rc
+  local d="$1" cwd prompt cmd code rc resume
   echo $$ > "$d/pid"
+  resume=$(cat "$d/resume" 2>/dev/null)
   cwd=$(cat "$d/cwd"); prompt=$(cat "$d/prompt")
   cd "$cwd" 2>/dev/null || cd "$HOME" || exit 1
 
@@ -211,7 +238,7 @@ worker() {
   if command -v "${cmd%% *}" >/dev/null 2>&1; then
     # shellcheck disable=SC2086
     $cmd -p --output-format json --append-system-prompt "$QUICK_SYSTEM" \
-      ${TMUX_QUICK_JOB_FLAGS:-} "$prompt" > "$d/raw.json" 2> "$d/stderr"
+      ${resume:+--resume "$resume"} ${TMUX_QUICK_JOB_FLAGS:-} "$prompt" > "$d/raw.json" 2> "$d/stderr"
     code=$?
   else
     printf "can't find '%s' on the tmux server's PATH:\n  %s\nPoint at it with: tmux set-environment -g TMUX_QUICK_JOB_CMD /full/path/to/claude\n" \
@@ -291,25 +318,57 @@ _pager() {
   else less -R -c -Ps'q — back to the list' -Pm'q — back to the list' "$1"; fi
 }
 
-# _view ID — the whole of one job, prompt first, then marks it read.
+# _thread ID — the conversation this job belongs to, oldest first, one id a line.
+# Walks `parent` links; stops at a pruned ancestor rather than failing, and at 50
+# in case a hand-edited file ever makes a loop.
+_thread() {
+  local id="$1" chain="" n=0
+  while [ -n "$id" ] && [ -d "$JOBS/$id" ] && [ "$n" -lt 50 ]; do
+    chain="$id${chain:+
+$chain}"
+    id=$(cat "$JOBS/$id/parent" 2>/dev/null)
+    n=$((n + 1))
+  done
+  printf '%s\n' "$chain"
+}
+
+# _view ID — the whole thread up to this job: every question and answer, oldest
+# first, so a follow-up reads in context rather than as a reply to nothing. Marks
+# this job read.
 _view() {
-  local d="$JOBS/$1" st tmp sid
+  local d="$JOBS/$1" st tmp t td tst first=1
   st=$(_state "$d")
   tmp=$(mktemp) || return
   {
-    printf '> %s\n\n' "$(tr '\n' ' ' < "$d/prompt")"
-    printf '_in %s · %s_\n\n---\n\n' "$(cat "$d/cwd")" "$st"
-    case "$st" in
-      running) printf 'Still running. prefix + Q again when the notification lands.\n' ;;
-      lost)    printf 'The job stopped without finishing (a reboot, or it was killed).\n' ;;
-      *)       cat "$d/output.md" 2>/dev/null ;;
-    esac
-    sid=$(cat "$d/session" 2>/dev/null)
-    [ -n "$sid" ] && printf '\n---\n\n_Follow up: tj resume %s_\n' "$1"
+    printf '_in %s_\n\n' "$(cat "$d/cwd")"
+    for t in $(_thread "$1"); do
+      td="$JOBS/$t"; tst=$(_state "$td")
+      [ "$first" = 1 ] || printf '\n---\n\n'
+      first=0
+      printf '> %s\n\n' "$(tr '\n' ' ' < "$td/prompt")"
+      case "$tst" in
+        running) printf '_Still running. You will be told when it answers._\n' ;;
+        lost)    printf '_The job stopped without finishing (a reboot, or it was killed)._\n' ;;
+        failed)  printf '_Failed:_\n\n'; cat "$td/output.md" 2>/dev/null ;;
+        *)       cat "$td/output.md" 2>/dev/null ;;
+      esac
+    done
   } > "$tmp"
   _pager "$tmp"
   rm -f "$tmp"
   [ "$st" = running ] || : > "$d/seen"
+}
+
+# _reply_prompt ID — asked straight after reading an answer, because that is the
+# moment a follow-up occurs to you. Enter on its own goes back to the list.
+# Prints the new job id when one was dispatched.
+_reply_prompt() {
+  local id="$1" text
+  [ -s "$JOBS/$id/session" ] || return 1          # nothing to continue
+  printf '\n  %s\n\n' "$(printf '\033[2m')follow up on this — enter on its own goes back$(printf '\033[0m')" >&2
+  IFS= read -r -e -p '  reply> ' text || return 1
+  [ -n "${text//[[:space:]]/}" ] || return 1
+  dispatch "" "$text" "$id"
 }
 
 # ---------------------------------------------------------------------------
@@ -319,16 +378,17 @@ _view() {
 # job, and it is NOT filtered by what you type (--disabled) — so enter on an
 # empty prompt reads the highlighted job, and enter with text dispatches it.
 popup_inside() {
-  local cwd="$1" out key query sel id
+  local cwd="$1" out key query sel id err
   while :; do
     out=$(
       _jobs | while IFS= read -r id; do _row "$id"; done |
-      fzf --disabled --print-query --expect=enter,ctrl-x,ctrl-y \
+      fzf --disabled --print-query --expect=enter,ctrl-f,ctrl-x,ctrl-y \
           --delimiter=$'\t' --with-nth=2 \
           --prompt='quick job> ' --reverse --height=100% --no-sort \
           --header="enter  run it in ${cwd/#$HOME/~}  ·  empty enter reads the highlighted job
+ctrl-f  send what you typed as a follow-up to the highlighted job
 ctrl-y copy its output  ·  ctrl-x forget it  ·  esc close
-⚡ running  ✉ unread  ✓ read  ✗ failed" \
+⚡ running  ✉ unread  ✓ read  ✗ failed  ↳ follow-up" \
           --color "$(ui_fzf_colors 2>/dev/null)"
     ) || [ -n "$out" ] || return 0
     query=$(printf '%s\n' "$out" | sed -n 1p)
@@ -341,7 +401,33 @@ ctrl-y copy its output  ·  ctrl-x forget it  ·  esc close
             tmux display-message -d 4000 "⚡ quick job started — you'll be told when it's done" 2>/dev/null
           return 0
         fi
-        [ -n "$sel" ] && _view "$sel"
+        if [ -n "$sel" ]; then
+          _view "$sel"
+          if id=$(_reply_prompt "$sel"); then
+            tmux display-message -d 4000 "⚡ follow-up sent — you'll be told when it answers" 2>/dev/null
+            return 0
+          fi
+        fi
+        ;;
+      ctrl-f)
+        # Typed text, sent to the highlighted job's conversation rather than as a
+        # new job. With nothing typed, it is the read-then-reply path instead.
+        [ -n "$sel" ] || continue
+        if [ -n "${query//[[:space:]]/}" ]; then
+          # stderr captured, stdout (the new id) dropped: the only thing worth
+          # showing here is why it could not be sent.
+          if err=$(dispatch "" "$query" "$sel" 2>&1 >/dev/null); then
+            tmux display-message -d 4000 "⚡ follow-up sent — you'll be told when it answers" 2>/dev/null
+            return 0
+          fi
+          tmux display-message -d 5000 "${err#tj: }" 2>/dev/null
+        else
+          _view "$sel"
+          if id=$(_reply_prompt "$sel"); then
+            tmux display-message -d 4000 "⚡ follow-up sent — you'll be told when it answers" 2>/dev/null
+            return 0
+          fi
+        fi
         ;;
       ctrl-y)
         [ -n "$sel" ] && [ -f "$JOBS/$sel/output.md" ] && {
@@ -414,6 +500,20 @@ cli() {
       id=$(_resolve "${2:-}") || return 1
       while [ "$(_state "$JOBS/$id")" = running ]; do sleep 1; done
       cat "$JOBS/$id/output.md"; : > "$JOBS/$id/seen" ;;
+    reply|re)
+      # tj reply [ID] TEXT... — ID only counts if it resolves to a job, so a reply
+      # that happens to start with a word ("tj reply what about X") still goes to
+      # the newest job rather than failing.
+      shift
+      [ $# -gt 0 ] || die "reply with what? tj reply [ID] TEXT"
+      if [ $# -gt 1 ] && { [ -d "$JOBS/$1" ] || _jobs | grep -q "^$1" 2>/dev/null; }; then
+        id=$(_resolve "$1") || return 1; shift
+      else
+        id=$(_resolve "") || return 1
+      fi
+      [ -n "$id" ] || die "no jobs to follow up on"
+      id=$(dispatch "" "$*" "$id") || return 1
+      echo "⚡ $id ↳ follow-up — tj wait $id, or you'll be notified" ;;
     resume)
       # The job's conversation, as an interactive agent in its own folder.
       id=$(_resolve "${2:-}") || return 1; d="$JOBS/$id"

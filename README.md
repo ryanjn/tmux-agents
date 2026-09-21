@@ -340,8 +340,22 @@ tj what is listening on port 3000     # same thing from a shell, in $PWD
 tj                                    # recent jobs
 tj show [ID]                          # print an answer (no ID: the newest)
 tj wait [ID]                          # block until it's done, then print it
+tj reply what about the staging box   # follow up on the newest job
+tj reply 0921-1624 and in prod?       # ...or on a particular one (any unique prefix)
 tj resume ID                          # it needed a conversation after all
 ```
+
+**Following up.** Read an answer with `prefix + Q` → enter, and when you close it
+you land on a `reply>` prompt: type a clarifying question and it goes back as
+another quick job *on the same conversation*, so "what about X?" means what you
+meant. Enter on its own goes back to the list. From the list, type and press
+`ctrl-f` to reply to the highlighted job without opening it. Follow-ups show as
+`↳` in the list, and reading one shows the whole thread above it.
+
+A follow-up always runs in the folder the original ran in, wherever you reply
+from — Claude Code files a conversation under the directory it ran in and can
+only resume it from there. A job may end with one question when it genuinely
+can't proceed; otherwise it still picks the most reasonable reading and says so.
 
 A job can't ask you anything, so a tool call your permission mode would have
 prompted for is denied and the agent works around it. It runs under your Claude

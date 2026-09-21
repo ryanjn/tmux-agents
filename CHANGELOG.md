@@ -2,6 +2,26 @@
 
 Notable changes per release. Dates are the release date, newest first.
 
+## 0.4.4 — 2026-09-21
+
+### Added
+
+- **Follow-ups on quick jobs.** After reading an answer in `prefix + Q` you land
+  on a `reply>` prompt; what you type runs as another quick job on the *same*
+  conversation (`claude -p --resume`), so a clarifying question keeps its
+  context. `ctrl-f` in the list replies to the highlighted job without opening
+  it, and `tj reply [ID] TEXT` does it from a shell.
+- **Threads.** Follow-ups are marked `↳`, and reading one shows every question
+  and answer above it, oldest first.
+- A job may now end with **one** question when it genuinely cannot proceed —
+  the user can answer it. The default is still to pick a reading and say so.
+
+### Notes
+
+- A follow-up always runs in the original job's folder. Claude Code files a
+  conversation under the directory it ran in and only finds it from there, so
+  replying from anywhere else would otherwise answer "No conversation found".
+
 ## 0.4.3 — 2026-09-19
 
 **Stuck, not thinking** — the other half of routing, and the expensive half.

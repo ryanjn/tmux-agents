@@ -417,6 +417,33 @@ fi
 check "the worker finds claude off the tmux server's PATH" "grep -q 'HOME/.local/bin' '$QJ'"
 check "a missing agent command is a failure, not a success" \
   "! grep -q 'code=\\\${code:-' '$QJ' && grep -q 'code=127' '$QJ'"
+# Follow-ups: a fake claude that reports whether it was resumed, and where.
+cat > "$QJTMP/resumer" <<'FAKE'
+#!/usr/bin/env bash
+sid="s-$RANDOM"; resumed=no
+while [ $# -gt 1 ]; do case "$1" in --resume) sid="$2"; resumed=yes; shift ;; esac; shift; done
+printf '{"type":"result","is_error":false,"result":"resumed=%s in %s","session_id":"%s"}\n' "$resumed" "$PWD" "$sid"
+FAKE
+chmod +x "$QJTMP/resumer"
+if command -v python3 >/dev/null 2>&1; then
+  QJCMD=resumer; mkdir -p "$QJTMP/origin"
+  ( cd "$QJTMP/origin" && QJCMD=resumer qj first >/dev/null ) && QJCMD=resumer qj wait >/dev/null
+  check "tj reply continues the same conversation" \
+    "( cd / && QJCMD=resumer qj reply and then >/dev/null ) && QJCMD=resumer qj wait | grep -q '^resumed=yes'"
+  check "a follow-up runs in the ORIGINAL folder, wherever you reply from" \
+    "QJCMD=resumer qj show | grep -q 'origin'"
+  check "every job in a thread carries one session id" \
+    "[ \"\$(cat '$QJTMP'/jobs/*/session | sort -u | wc -l | tr -d ' ')\" -le 3 ] && [ \"\$(ls -d '$QJTMP'/jobs/*/ | xargs -I{} sh -c 'test -f {}parent && cat {}resume' | sort -u | wc -l | tr -d ' ')\" = 1 ]"
+  check "follow-ups are marked ↳ in the list" "QJCMD=resumer qj | head -1 | grep -q '↳ and then'"
+  check "the thread view shows the question it follows" \
+    "QJCMD=resumer qj view 2>/dev/null | grep -q '> first'"
+  check "a reply starting with an ordinary word goes to the newest job" \
+    "( QJCMD=resumer qj reply what about y >/dev/null ) && [ -f \"\$(ls -d '$QJTMP'/jobs/*/ | sort | tail -1)parent\" ]"
+  QJCMD=fail qj broken >/dev/null; sleep 2
+  check "no follow-up on a job that never started a conversation" "! QJCMD=resumer qj reply x 2>/dev/null"
+  check "no follow-up on a job still running" \
+    "printf '#!/usr/bin/env bash\nsleep 3\n' > '$QJTMP/slow'; chmod +x '$QJTMP/slow'; QJCMD=slow qj slow one >/dev/null; ! qj reply too soon 2>/dev/null"
+fi
 check "prefix + Q is in the config template" "grep -q 'bind Q .*tmux-quick-job.sh --popup' '$ROOT/tmux/agents.conf.in'"
 rm -rf "$QJTMP"
 

@@ -569,6 +569,28 @@ check "tsnaps -l reads is_agent at 15, not an older position" \
 check "trestore reads the snapshot by name, in writer order" \
   "grep -q 'read -r tag session widx wname wactive wlayout pidx pactive cwd cmd title paneid optsid opttask isagent task sid' '$ROOT/bin/tmux-agent-restore.sh'"
 
+# The picker's Restoring rows come from the restore marker: pid on line 1,
+# sessions still to build after it. A dead pid means no restore, whatever the
+# marker says; an unclaimed boot means the whole snapshot is pending.
+RST=$(mktemp -d)
+sleep 30 & RPID=$!
+printf '%s\nrst-ghost-a\nrst-ghost-b\n' "$RPID" > "$RST/.restoring"
+check "_t_restoring lists the marker's sessions while its restore is alive" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; TMUX_AGENTS_STATE='$RST' _t_restoring | cut -f1,2 | tr '\t\n' ':|' )\" = 'rst-ghost-a:restoring|rst-ghost-b:restoring|' ]"
+check "picker --list shows them under a Restoring heading, with no pane id" \
+  "TMUX_AGENTS_STATE='$RST' '$ROOT/bin/tmux-agent-picker.sh' --list | grep -q 'Restoring' &&
+   TMUX_AGENTS_STATE='$RST' '$ROOT/bin/tmux-agent-picker.sh' --list | grep 'rst-ghost-a' | cut -f1 | grep -qx ''"
+check "autosave reads only the pid line of the marker" \
+  "grep -q 'rpid=\$(head -n1 \"\$RESTORING\"' '$ROOT/bin/tmux-agent-autosave.sh'"
+kill "$RPID" 2>/dev/null; wait "$RPID" 2>/dev/null
+check "_t_restoring ignores a marker whose restore is dead" \
+  "[ -z \"\$( . '$ROOT/shell/agents.sh'; TMUX_AGENTS_STATE='$RST' _t_restoring )\" ]"
+rm -f "$RST/.restoring"
+printf 'P\trst-ghost-c\t1\tclaude\n' > "$RST/last.tsv"; echo 1 > "$RST/last-boot"
+check "_t_restoring shows the snapshot as pending before this boot's restore" \
+  "[ \"\$( . '$ROOT/shell/agents.sh'; TMUX_AGENTS_STATE='$RST' _t_restoring )\" = \"rst-ghost-c\$(printf '\t')pending\" ]"
+rm -rf "$RST"
+
 # "Is this pane an agent?" is answered in two places — shell/agents.sh for
 # everything live, bin/tmux-agent-save.sh for the snapshot. They drifted: one
 # accepted any single-character first token, the other required a

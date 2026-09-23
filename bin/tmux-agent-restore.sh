@@ -125,6 +125,18 @@ run_pane() {
   "${TMUX_BIN[@]}" "${args[@]}"
 }
 
+# The marker's remaining lines name every session this run is about to build, so
+# the picker can show them as "restoring" instead of just not having them. After
+# a reboot this takes minutes on a machine that is still indexing, and a list
+# missing its sessions looks like they are gone. Line 1 stays the pid —
+# autosave reads only that.
+if [ "$DRY" -eq 0 ]; then
+  awk -F"$TAB" '$1 == "P" && !seen[$2]++ { print $2 }' "$FILE" |
+    while IFS= read -r s; do
+      want "$s" && ! session_exists "$s" && printf '%s\n' "$s"
+    done >> "$RESTORING"
+fi
+
 made=0; skipped=0; agents=0; exact=0
 declare -a eager=()
 # ⚠️  "am I building this session" is its own flag, NOT cur_session="". Blanking

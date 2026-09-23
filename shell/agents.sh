@@ -1409,6 +1409,43 @@ _t_waited_for() {
   printf '%s' "$(( _T_NOW - m ))"
 }
 
+# _t_restoring — sessions that are coming back after a reboot but do not exist
+# yet, one per line as "NAME<TAB>STATE":
+#
+#   restoring   a restore is running and has not reached this one
+#   pending     this boot's restore has not started (launchd has yet to fire it)
+#
+# Without this the picker just lacks them for the minutes a restore takes on a
+# machine still indexing after boot, which looks exactly like losing them.
+#
+# The running case reads the list the restore wrote into its marker, so a
+# filtered `trestore NAME` shows only what it will actually build. The pending
+# case is the same test persist.sh makes — this boot has not been claimed — and
+# offers the whole last snapshot, which is what that restore will replay.
+_t_restoring() {
+  local state_dir="${TMUX_AGENTS_STATE:-$HOME/.local/state/tmux-agents}"
+  local marker="$state_dir/.restoring" pid names state boot live
+  if [ -r "$marker" ]; then
+    pid=$(head -n1 "$marker" 2>/dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 0
+    names=$(tail -n +2 "$marker" 2>/dev/null); state=restoring
+  else
+    [ -r "$state_dir/last.tsv" ] || return 0
+    boot=$(sysctl -n kern.boottime 2>/dev/null | sed 's/.*sec = \([0-9]*\).*/\1/')
+    [ -n "$boot" ] || return 0
+    [ "$(cat "$state_dir/last-boot" 2>/dev/null)" = "$boot" ] && return 0
+    names=$(awk -F'\t' '$1 == "P" && !seen[$2]++ { print $2 }' "$state_dir/last.tsv")
+    state=pending
+  fi
+  [ -n "$names" ] || return 0
+  live=$'\n'$(tmux list-sessions -F '#{session_name}' 2>/dev/null)$'\n'
+  printf '%s\n' "$names" | while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    case "$live" in *$'\n'"$n"$'\n'*) continue ;; esac
+    printf '%s\t%s\n' "$n" "$state"
+  done
+}
+
 # _t_agent_display — _t_agent_rows with a ready-to-print label attached:
 #
 #   1 pane_id   2 session   3 cwd   4 glyph   5 status   6 label   7 task   8 age

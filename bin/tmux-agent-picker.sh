@@ -73,7 +73,16 @@ fi
 # nothing at all (see the transform bind below). fzf has no notion of an
 # unselectable row, and a heading that filters away when you type is the right
 # behaviour anyway: once you are searching, days are noise.
+#
+# Sessions still coming back from a reboot go on top, under their own heading and
+# with no pane id, so they read as present-but-not-yet rather than missing, and
+# enter on one is the same no-op as on a heading. See _t_restoring.
 _list() {
+  declare -F _t_restoring >/dev/null 2>&1 && _t_restoring |
+    awk -F'\t' -v dim="$(printf '\033[2m')" -v off="$(printf '\033[0m')" '
+      NR == 1 { printf "\t\t\t%s── Restoring ──────────────────────────────%s\n", dim, off }
+      { printf "\t%s\t\t%s↻ %-4s %-5s %-30s %s%s\n", $1, dim, "", "", $1,
+               ($2 == "pending" ? "waiting for the restore to start" : "coming back after the reboot"), off }'
   _t_agent_display |
     awk -F'\t' -v dim="$(printf '\033[2m')" -v off="$(printf '\033[0m')" '
       $11 != seen { seen = $11
@@ -206,8 +215,26 @@ _pick_new_name() {
   printf '%s' "${sel%%$'\t'*}"
 }
 
+# --watch-restore SOCKET: keep the open picker current while a restore runs.
+# fzf has no timer, so this polls from outside and pushes a reload through fzf's
+# --listen socket each time a session lands, then one last reload once the
+# restore is finished so the Restoring heading goes away. It exits by itself
+# when the picker closes: the post fails once nothing is listening.
+_watch_restore() {
+  local sock="$1" was now
+  was=$(_t_restoring 2>/dev/null)
+  while [ -n "$was" ]; do
+    sleep 2
+    now=$(_t_restoring 2>/dev/null)
+    [ "$now" = "$was" ] && continue
+    was="$now"
+    curl -fs --unix-socket "$sock" -XPOST http://localhost -d "reload($0 --list)" || return 0
+  done
+}
+
 case "${1:-}" in
   --list)    _list; exit 0 ;;
+  --watch-restore) shift; _watch_restore "${1:-}"; exit 0 ;;
   --preview) shift; _preview "${1:-}" "${2:-}"; exit 0 ;;
 esac
 
@@ -276,12 +303,26 @@ while :; do
     *) heading_bind=(--bind 'enter:transform:[ -n {1} ] && echo accept || echo ignore') ;;
   esac
 
+  # A restore in flight: let fzf take reloads on a socket and start the watcher
+  # that sends them. Only then — an idle picker should not be polling anything.
+  listen=(); watcher=""
+  if declare -F _t_restoring >/dev/null 2>&1 && [ -n "$(_t_restoring 2>/dev/null)" ] &&
+     command -v curl >/dev/null 2>&1; then
+    sock="${TMPDIR:-/tmp}/tmux-agent-picker.$$.sock"
+    rm -f "$sock"
+    listen=(--listen="$sock")
+    # Give fzf a moment to open the socket; the watcher's first post is 2s out.
+    "$0" --watch-restore "$sock" >/dev/null 2>&1 &
+    watcher=$!
+  fi
+
   out=$(
     printf '%s\n' "$rows" | fzf \
       --delimiter=$'\t' \
       --with-nth=4.. \
       --ansi \
       "${heading_bind[@]}" \
+      ${listen[@]+"${listen[@]}"} \
       --print-query \
       --expect=ctrl-n,ctrl-s,ctrl-v,ctrl-g,ctrl-x,ctrl-t,ctrl-f,ctrl-o \
       --preview "$0 --preview {1} {3}" \
@@ -293,6 +334,11 @@ while :; do
       --reverse --cycle --height=100% \
       --bind "ctrl-r:reload($0 --list)"
   )
+
+  if [ -n "$watcher" ]; then
+    kill "$watcher" 2>/dev/null
+    rm -f "$sock"
+  fi
 
   query=$(printf '%s\n' "$out" | sed -n 1p)
   key=$(printf '%s\n' "$out" | sed -n 2p)

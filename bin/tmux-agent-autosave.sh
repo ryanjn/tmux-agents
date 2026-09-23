@@ -34,7 +34,7 @@ SETTLE="${TMUX_AGENT_AUTOSAVE_SETTLE:-2}"
 mkdir -p "$STATE_DIR"
 
 if [ -e "$RESTORING" ]; then
-  rpid=$(cat "$RESTORING" 2>/dev/null)
+  rpid=$(head -n1 "$RESTORING" 2>/dev/null)
   if [ -n "$rpid" ] && kill -0 "$rpid" 2>/dev/null; then exit 0; fi
   rm -f "$RESTORING"
 fi

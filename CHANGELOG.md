@@ -2,6 +2,21 @@
 
 Notable changes per release. Dates are the release date, newest first.
 
+## Unreleased
+
+### Added
+
+- **Restoring rows in the picker.** After a reboot, sessions the restore has
+  not rebuilt yet show at the top of `prefix + a` under a Restoring heading
+  (`↻`), instead of just being absent for the minutes a restore can take on a
+  machine still indexing. Before the restore has started they read "waiting for
+  the restore to start". Rows drop off live as each session lands.
+
+### Notes
+
+- The `.restoring` marker now carries the sessions a restore will build on the
+  lines after its pid. Autosave reads only the first line.
+
 ## 0.4.4 — 2026-09-21
 
 ### Added

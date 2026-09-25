@@ -23,7 +23,7 @@
 # command, and `t` is a popular alias. Check with `type t` before sourcing, or
 # see the README for how to load only the tmux keybindings.
 
-TMUX_AGENTS_VERSION="0.4.5"
+TMUX_AGENTS_VERSION="0.4.6"
 
 command -v tmux >/dev/null 2>&1 || return 0
 
@@ -1440,7 +1440,7 @@ _t_restoring() {
     names=$(tail -n +2 "$marker" 2>/dev/null); state=restoring
   else
     [ -r "$state_dir/last.tsv" ] || return 0
-    boot=$(sysctl -n kern.boottime 2>/dev/null | sed 's/.*sec = \([0-9]*\).*/\1/')
+    boot=$("$_TA_BIN/boot-id.sh" 2>/dev/null)
     [ -n "$boot" ] || return 0
     [ "$(cat "$state_dir/last-boot" 2>/dev/null)" = "$boot" ] && return 0
     names=$(awk -F'\t' '$1 == "P" && !seen[$2]++ { print $2 }' "$state_dir/last.tsv")

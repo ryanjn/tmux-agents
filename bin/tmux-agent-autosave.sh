@@ -39,9 +39,14 @@ if [ -e "$RESTORING" ]; then
   rm -f "$RESTORING"
 fi
 
-boot_id=$(sysctl -n kern.boottime 2>/dev/null | sed 's/.*sec = \([0-9]*\).*/\1/')
-if [ -n "$boot_id" ] && [ "$(cat "$STATE_DIR/last-boot" 2>/dev/null)" != "$boot_id" ]; then
-  exit 0
+# Either format counts as "this boot's restore has claimed it" — persist.sh
+# rewrites the old one on its next tick, and until then saving must not stop.
+boot_id=$("$DIR/boot-id.sh" 2>/dev/null)
+if [ -n "$boot_id" ]; then
+  seen=$(cat "$STATE_DIR/last-boot" 2>/dev/null)
+  if [ "$seen" != "$boot_id" ] && [ "$seen" != "$("$DIR/boot-id.sh" --legacy 2>/dev/null)" ]; then
+    exit 0
+  fi
 fi
 
 touch "$DIRTY"

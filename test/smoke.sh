@@ -444,6 +444,19 @@ if command -v python3 >/dev/null 2>&1; then
   check "no follow-up on a job still running" \
     "printf '#!/usr/bin/env bash\nsleep 3\n' > '$QJTMP/slow'; chmod +x '$QJTMP/slow'; QJCMD=slow qj slow one >/dev/null; ! qj reply too soon 2>/dev/null"
 fi
+check "boot-id prints something stable on this platform" \
+  "[ -n \"\$('$ROOT/bin/boot-id.sh')\" ]"
+check "it is the boot SECOND, not the microseconds the greedy old sed caught" \
+  "[ \"\$(uname -s)\" != Darwin ] ||
+   [ \"\$('$ROOT/bin/boot-id.sh')\" = \"\$(sysctl -n kern.boottime | sed -n 's/^[^0-9]*sec = \\([0-9]*\\).*/\\1/p')\" ]"
+check "--legacy still prints what the old code did, for the marker migration" \
+  "[ \"\$(uname -s)\" != Darwin ] ||
+   [ \"\$('$ROOT/bin/boot-id.sh' --legacy)\" = \"\$(sysctl -n kern.boottime | sed 's/.*sec = \\([0-9]*\\).*/\\1/')\" ]"
+check "an old-format marker is migrated, not treated as a reboot" \
+  "grep -q 'same uptime, not restoring' '$ROOT/bin/tmux-agent-persist.sh'"
+check "nobody reads kern.boottime except boot-id.sh (it is macOS-only)" \
+  "! grep -rn 'kern.boottime' '$ROOT/bin' '$ROOT/shell' | grep -v 'bin/boot-id.sh'"
+
 check "prefix + Q is in the config template" "grep -q 'bind Q .*tmux-quick-job.sh --popup' '$ROOT/tmux/agents.conf.in'"
 rm -rf "$QJTMP"
 

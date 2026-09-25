@@ -2,6 +2,23 @@
 
 Notable changes per release. Dates are the release date, newest first.
 
+## 0.4.6 — 2026-09-24
+
+### Fixed
+
+- **The boot id was the microseconds, not the boot time, and only on macOS.**
+  `sed 's/.*sec = \([0-9]*\).*/\1/'` is greedy — it ran past `sec =` to
+  `usec =`. It worked by accident (usec changes every boot too) but the same
+  expression returned *empty* on Linux, where `_t_restoring` then silently never
+  reported a pending restore. That is why the restoring-rows test passed on
+  every Mac and failed in CI.
+- **One boot id, one file** — `bin/boot-id.sh`, with the platform branch in it
+  (`kern.boottime`, `/proc/stat` btime, pid 1 as a fallback). The three copies
+  that used to exist all had the same bug, which is what three copies are for.
+- **Existing machines migrate silently.** A marker in the old format is
+  recognised as this same uptime and rewritten, rather than read as a reboot —
+  which would have restored a server that is already running.
+
 ## 0.4.5 — 2026-09-24
 
 Both halves of the same morning: what a reboot leaves behind, and how you get

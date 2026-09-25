@@ -23,10 +23,23 @@ SOCKET="${TMUX_AGENTS_SOCKET:-default}"
 mkdir -p "$STATE_DIR"
 log() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG"; }
 
-# kern.boottime changes only across a real boot, so it identifies this uptime.
-boot_id=$(sysctl -n kern.boottime 2>/dev/null | sed 's/.*sec = \([0-9]*\).*/\1/')
+# The boot id changes only across a real boot, so it identifies this uptime.
+# bin/boot-id.sh owns the platform branch — see the warning in it.
+boot_id=$("$HERE/boot-id.sh" 2>/dev/null)
 [ -n "$boot_id" ] || boot_id="unknown"
 seen=$(cat "$BOOT_MARK" 2>/dev/null || echo "")
+
+# Migration: a marker written by the pre-0.4.6 id (see boot-id.sh) is this same
+# boot recorded differently, not a new one. Rewrite it and carry on — restoring
+# on top of a server that is already up is the one outcome worth this much care.
+if [ "$boot_id" != "$seen" ] && [ -n "$seen" ]; then
+  legacy=$("$HERE/boot-id.sh" --legacy 2>/dev/null)
+  if [ -n "$legacy" ] && [ "$seen" = "$legacy" ]; then
+    printf '%s\n' "$boot_id" > "$BOOT_MARK"
+    log "boot id format updated ($seen -> $boot_id); same uptime, not restoring"
+    seen="$boot_id"
+  fi
+fi
 
 if [ "$boot_id" != "$seen" ]; then
   # First run of this uptime. Claim it before restoring, so a restore that dies

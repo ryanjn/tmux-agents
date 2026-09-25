@@ -100,15 +100,16 @@ case "$cmd" in
     # A pane carrying @agent-session-id whose foreground process is a plain shell
     # is exactly the sleeping case, and _t_agent_restart already handles "resume a
     # pane whose agent has exited", on the exact conversation.
-    sid=$(tmux show-options -pqv -t "$pane" @agent-session-id 2>/dev/null)
-    cur=$(tmux display-message -p -t "$pane" '#{pane_current_command}' 2>/dev/null)
-    if [ -n "${sid:-}" ]; then
-      case "${cur##*/}" in
-        bash|zsh|sh|dash|fish|ksh)
-          tmux display-message "waking '$(tmux display-message -p -t "$pane" '#{session_name}')'…"
-          _t_agent_restart "$pane" >/dev/null 2>&1 || true
-          ;;
+    # _t_wake_pane holds this rule; `t NAME` wakes through the same one, so the
+    # picker and the shell command cannot drift apart on what "go to it" means.
+    if declare -F _t_wake_pane >/dev/null 2>&1; then
+      sid=$(tmux show-options -pqv -t "$pane" @agent-session-id 2>/dev/null)
+      cur=$(tmux display-message -p -t "$pane" '#{pane_current_command}' 2>/dev/null)
+      case "${sid:+set}${cur##*/}" in
+        setbash|setzsh|setsh|setdash|setfish|setksh)
+          tmux display-message "waking '$(tmux display-message -p -t "$pane" '#{session_name}')'…" ;;
       esac
+      _t_wake_pane "$pane" || true
     fi
 
     _t_focus "$pane" || die "agent focus: $pane is gone"

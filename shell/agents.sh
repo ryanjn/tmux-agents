@@ -23,7 +23,7 @@
 # command, and `t` is a popular alias. Check with `type t` before sourcing, or
 # see the README for how to load only the tmux keybindings.
 
-TMUX_AGENTS_VERSION="0.4.4"
+TMUX_AGENTS_VERSION="0.4.5"
 
 command -v tmux >/dev/null 2>&1 || return 0
 
@@ -394,7 +394,8 @@ _t_help() {
 tmux agents — sessions that hold Claude Code agents
 
 SESSIONS
-  t NAME               attach, creating the session and its folder if needed
+  t NAME               attach — creating the session and its folder if needed, and
+                       waking the agent if it is asleep or came back from a reboot
   t REPO [NAME]        same, but the folder is a checkout (owner/repo, URL, path)
   t                    attach to the most recent session
   tl                   list sessions      tw   every pane, and what runs in it
@@ -506,15 +507,16 @@ t() {
 
   if [ -z "$session" ]; then
     if tmux has-session 2>/dev/null; then
-      # Let tmux pick the most recent itself.
-      if [ -n "${TMUX:-}" ]; then
-        tmux switch-client -l
-      else
-        tmux attach
-      fi
-      return
+      # Resolve the target rather than letting `switch-client -l` / `attach` pick
+      # it: knowing WHICH session this lands on is what makes waking it possible.
+      # Most recently attached, skipping the one we are sitting in.
+      local here=""
+      [ -n "${TMUX:-}" ] && here=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+      session=$(tmux list-sessions -F '#{session_last_attached}	#{session_name}' 2>/dev/null |
+                LC_ALL=C sort -rn | cut -f2- | grep -vxF "${here:-$(printf '\001')}" | head -1)
+      [ -n "$session" ] || session="$here"
     fi
-    session=main
+    [ -n "$session" ] || session=main
   fi
 
   # A slash would turn mkdir -p into a surprise directory tree.
@@ -538,6 +540,13 @@ t() {
     # repo is ignored rather than checked out somewhere unexpected.
     echo "t: '$session' is already running — attaching, not checking out '$repo'" >&2
   fi
+
+  # Sleeping agents in there come back before you land, so `t NAME` means the
+  # same thing whether the agent is running, asleep, or restored from a snapshot
+  # after a reboot.
+  local woke
+  woke=$(_t_wake_session "$session")
+  [ -n "$woke" ] && echo "t: waking $woke agent(s) in '$session' on their own conversations" >&2
 
   if [ -n "${TMUX:-}" ]; then
     tmux switch-client -t "=$session"
@@ -2039,6 +2048,43 @@ _t_agent_touch() {
 # _t_agent_resume_cmd PANE — the command that brings PANE's agent back.
 # $T_RESUME wins outright; otherwise an exact -r when the id is known, and
 # --continue only as the fallback for an agent that never had one.
+# _t_wake_pane PANE — if this pane holds a SLEEPING agent, bring it back on its
+# own conversation. Silent no-op for a live agent, or a pane that never held one.
+#
+# A pane carrying @agent-session-id whose foreground process is a plain shell is
+# exactly the sleeping case: the conversation exists, the process does not. That
+# is what a restored session looks like after a reboot (restore rebuilds the
+# shape and leaves the agents parked), and what `tsleep` leaves behind.
+_t_wake_pane() {
+  local pane="$1" sid cur
+  sid=$(tmux show-options -pqv -t "$pane" @agent-session-id 2>/dev/null)
+  [ -n "$sid" ] || return 1
+  cur=$(tmux display-message -p -t "$pane" '#{pane_current_command}' 2>/dev/null)
+  case "${cur##*/}" in
+    bash|zsh|sh|dash|fish|ksh) ;;
+    *) return 1 ;;                       # something is already running here
+  esac
+  _t_agent_restart "$pane" >/dev/null 2>&1
+}
+
+# _t_wake_session NAME — wake every sleeping agent in that session. Prints how
+# many it woke, so callers can say so.
+#
+# ⚠️  Going to an agent means having the agent, not the shell its pane is parked
+# at. `t NAME` used to attach and leave you looking at a bare prompt with a hint
+# scrolled off the top — after a reboot, that was every session on the machine,
+# and the fix was a command the person had to know and type per agent. The picker
+# has done this on enter since 0.2; `t` doing something different was the bug.
+_t_wake_session() {
+  local session="$1" pane woke=0
+  while IFS= read -r pane; do
+    [ -n "$pane" ] || continue
+    _t_wake_pane "$pane" && woke=$((woke + 1))
+  done <<< "$(tmux list-panes -s -t "=$session" -F '#{pane_id}' 2>/dev/null)"
+  [ "$woke" -gt 0 ] && printf '%s' "$woke"
+  return 0
+}
+
 _t_agent_resume_cmd() {
   local sid
   if [ -n "${T_RESUME:-}" ]; then printf '%s\n' "$T_RESUME"; return 0; fi

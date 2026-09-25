@@ -146,6 +146,54 @@ check "restore puts it back on its own directory" \
 check "restore does not duplicate a session that is still running" \
   "[ \"\$(t_ list-sessions -F '#{session_name}' | grep -c '^beta\$')\" = 1 ]"
 
+printf '\nt NAME wakes what it lands on\n'
+# The bug this covers, from a real morning: an OS update rebooted the machine,
+# restore rebuilt 24 sessions, and every one of them was a shell parked on a
+# hint that scrolled off the top. `t NAME` attached to that shell and said
+# nothing, so the way back to an agent was a `claude -r <guid>` you had to find
+# and type. The picker had woken sleeping agents since 0.2; `t` had not.
+#
+# A sleeping agent is exactly this: @agent-session-id on the pane, a plain shell
+# running in it. T_RESUME stands in for `claude -r <id>`, which is not installed
+# here and is not what is under test — that the wake happens at all is.
+#
+# ⚠️  The stand-in has to keep RUNNING. A resume command that prints and exits
+# leaves the pane back at a shell, i.e. still "asleep" — which made the no-op
+# check below fail for a reason that has nothing to do with the code under test.
+FAKE_RESUME='printf AGENT-RESUMED\n; sleep 300'
+sleeping_agent() {      # sleeping_agent SESSION
+  mkdir -p "$TMUX_SESSION_PATH/$1"
+  t_ new-session -d -s "$1" -c "$TMUX_SESSION_PATH/$1"
+  local p
+  p=$(t_ list-panes -t "$1" -F '#{pane_id}')
+  t_ set-option -p -t "$p" @agent-session-id "sid-$1"
+  t_ set-option -p -t "$p" @agent-task "was doing $1"
+  sleep 0.3
+}
+woke_marker() {         # woke_marker SESSION — did the resume command run there?
+  t_ capture-pane -p -t "$1" 2>/dev/null | grep -q AGENT-RESUMED
+}
+
+sleeping_agent naptime
+sleeping_agent elsewhere
+check "a restored pane reads as asleep, not as a shell" \
+  "_t_agent_rows 2>/dev/null | awk -F'\t' '\$5 == \"naptime\" { print \$2 }' | grep -q asleep"
+
+T_RESUME="$FAKE_RESUME" _t_wake_session naptime >/dev/null
+sleep 1
+check "t NAME wakes the sleeping agent it is going to" "woke_marker naptime"
+check "and leaves every other session alone" "! woke_marker elsewhere"
+
+# Twice in a row must not stack two agents in one pane: the second call sees a
+# pane that is no longer a plain shell and does nothing.
+before=$(t_ capture-pane -p -t naptime | grep -c AGENT-RESUMED)
+T_RESUME="$FAKE_RESUME" _t_wake_session naptime >/dev/null
+sleep 0.5
+check "waking an already-woken agent is a no-op" \
+  "[ \"\$(t_ capture-pane -p -t naptime | grep -c AGENT-RESUMED)\" = \"$before\" ]"
+check "a session that never held an agent is untouched" \
+  "[ -z \"\$(T_RESUME=\"\$FAKE_RESUME\" _t_wake_session plain)\" ]"
+
 printf '\nthe doctor sees through the title contract\n'
 # The failure this release exists for: a pane that is plainly an agent by every
 # other measure, whose title no longer matches. Detection must not call this

@@ -2,7 +2,10 @@
 
 Notable changes per release. Dates are the release date, newest first.
 
-## Unreleased
+## 0.4.5 — 2026-09-24
+
+Both halves of the same morning: what a reboot leaves behind, and how you get
+back to it.
 
 ### Added
 
@@ -11,6 +14,19 @@ Notable changes per release. Dates are the release date, newest first.
   (`↻`), instead of just being absent for the minutes a restore can take on a
   machine still indexing. Before the restore has started they read "waiting for
   the restore to start". Rows drop off live as each session lands.
+
+### Fixed
+
+- **`t NAME` left you at a bare shell instead of the agent.** After a reboot,
+  restore rebuilds every session and parks each agent at a shell with a hint —
+  and `t NAME` attached to that shell silently, so the way back to a
+  conversation was a `claude -r <id>` you had to find in the scrollback and
+  type, once per agent. `t` now wakes what it lands on, on the exact
+  conversation. The picker has done this on enter since 0.2; the two now share
+  one rule (`_t_wake_pane`) rather than disagreeing about what "go to it" means.
+- **Bare `t` picks its target explicitly** — most recently attached session,
+  excluding the one you are in — instead of leaving it to `switch-client -l`.
+  Knowing which session it lands on is what makes waking it possible.
 
 ### Notes
 

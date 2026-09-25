@@ -224,6 +224,11 @@ here if that session has since died.
 Capitals because `prefix + a` is the picker and these belong with it: `a` finds an
 agent that exists, `A` makes one here, `B` sends one home.
 
+`t NAME` on an agent that is asleep — or that came back from a reboot as a
+parked shell — **wakes it on its own conversation** before you land. So does
+enter in the picker. Going to an agent means having the agent, not the shell its
+pane is sitting at.
+
 ### Sleep and wake — `prefix + S`, `prefix + R`
 
 An idle agent still holds roughly 400MB. A few dozen of them is real memory spent

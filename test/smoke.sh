@@ -217,6 +217,43 @@ rm -rf "$STATHOME"
 check "the transcript lookup is shared, not duplicated" \
   "[ \"\$(grep -c 'claude/projects' '$ROOT/shell/agents.sh')\" = 1 ]"
 
+printf '\nbackground sessions (/fork)\n'
+# The cache seam: a fixture here means `claude agents` is never run, which is
+# also the point — a picker that shells out to another CLI on every open is a
+# picker that stops opening when that CLI hangs.
+BGT=$(mktemp -d); BGC="$BGT/background.tsv"
+NOWS=$(date +%s)
+{ printf '◆\tblocked\tabc12345\tsid-a\t/tmp\tAsk me something\t%s\n' "$((NOWS - 90))"
+  printf '✓\tdone\tdef67890\tsid-b\t/tmp\tFinished thing\t%s\n' "$((NOWS - 7200))"
+} > "$BGC"
+bg() { ( . "$ROOT/shell/agents.sh"; TMUX_AGENT_BG_CACHE="$BGC" "$@" ); }
+
+check "--cached reads the cache and never runs claude" \
+  "PATH=/nonexistent:\$PATH bg _t_bg_rows --cached | grep -qc abc12345"
+check "rows carry glyph, state, id, session, cwd, name, start" \
+  "[ \"\$(bg _t_bg_rows --cached | head -1 | awk -F'\t' '{print NF}')\" = 7 ]"
+check "a blocked one reads as needing you" \
+  "bg _t_bg_rows --cached | awk -F'\t' '\$3 == \"abc12345\"' | grep -q '^◆'"
+check "the picker lists them under their own heading, with no pane id" \
+  "TMUX_AGENT_BG_CACHE='$BGC' '$ROOT/bin/tmux-agent-picker.sh' --list 2>/dev/null | grep -q 'Background (no pane)' &&
+   TMUX_AGENT_BG_CACHE='$BGC' '$ROOT/bin/tmux-agent-picker.sh' --list 2>/dev/null | grep 'abc12345' | cut -f1 | grep -qx ''"
+check "the row says enter adopts it" \
+  "TMUX_AGENT_BG_CACHE='$BGC' '$ROOT/bin/tmux-agent-picker.sh' --list 2>/dev/null | grep abc12345 | grep -q 'enter adopts it'"
+check "it carries bg:<id> where a session name would be, for enter to act on" \
+  "TMUX_AGENT_BG_CACHE='$BGC' '$ROOT/bin/tmux-agent-picker.sh' --list 2>/dev/null | grep abc12345 | cut -f2 | grep -qx 'bg:abc12345'"
+check "ages are computed when read, not frozen when cached" \
+  "TMUX_AGENT_BG_CACHE='$BGC' '$ROOT/bin/tmux-agent-picker.sh' --list 2>/dev/null | grep abc12345 | grep -q '1m'"
+check "the status line counts the live ones only, and never refreshes" \
+  "grep -q '_t_bg_rows --cached' '$ROOT/bin/tmux-agent-status.sh' &&
+   grep -q \"\\\$2 != .done\" '$ROOT/bin/tmux-agent-status.sh'"
+check "a listing with no background sessions prints nothing" \
+  "[ -z \"\$(: > '$BGT/empty.tsv'; ( . '$ROOT/shell/agents.sh'; TMUX_AGENT_BG_CACHE='$BGT/empty.tsv' _t_bg_rows --cached ))\" ]"
+check "interactive sessions are not taken from the listing (panes already show them)" \
+  "grep -q 'kind..) != .background' '$ROOT/shell/agents.sh' || grep -q 'r.get(\"kind\") != \"background\"' '$ROOT/shell/agents.sh'"
+check "adopt attaches, and does not resume a session the supervisor still runs" \
+  "grep -q 'attach \$id' '$ROOT/bin/tmux-agent-do.sh' && ! grep -q 'adopt.*-r \$' '$ROOT/bin/tmux-agent-do.sh'"
+rm -rf "$BGT"
+
 printf '\ngrouping by day\n'
 # Seconds since local midnight, the same way _t_agent_display works it out — so
 # "yesterday" here means the calendar day before this one, not 24 hours ago.
@@ -253,8 +290,9 @@ PICKAWK=$(sed -n "/\\\$11 != seen/,/\\\$7 }'/p" "$ROOT/bin/tmux-agent-picker.sh"
 check "the picker emits one heading per group, with an empty pane id" \
   "[ \"\$( . '$ROOT/shell/agents.sh'; eval \"\$GSTUB\"; _T_TODAY_SECS=$MIDNIGHT _t_agent_display |
        awk -F'\t' -v dim= -v off= \"\$PICKAWK\" | awk -F'\t' '\$1 == \"\" { n++ } END { print n+0 }' )\" = 6 ]"
-check "the picker reopens rather than exiting when a heading is chosen" \
-  "grep -q 'can only be a' '$ROOT/bin/tmux-agent-picker.sh'"
+check "a selection with no pane is a heading (reopen) or a background row (adopt)" \
+  "grep -q '_request adopt' '$ROOT/bin/tmux-agent-picker.sh' &&
+   sed -n '/if \\[ -z \"\\\$pane\" \\]; then/,/^  fi/p' '$ROOT/bin/tmux-agent-picker.sh' | grep -q 'continue'"
 check "no Unicode escapes in awk — they are not portable" \
   "! grep -n 'gsub(.*\\\\\\\\u00' '$ROOT/shell/agents.sh'"
 

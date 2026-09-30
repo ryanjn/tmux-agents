@@ -46,7 +46,14 @@ if [ -z "$rows" ]; then
   # counts agents that managed to ASK; a wedged one never got that far, so it is
   # named here rather than left to be discovered an hour later.
   stuck=$(_t_agent_rows | awk -F'\t' '$2 == "stuck"' | wc -l | tr -d ' ')
-  if [ "${stuck:-0}" -gt 0 ]; then
+  # A background session (`/fork`) can be blocked on you too, and it has no pane
+  # to jump to — so say so rather than reporting an all-clear that is not one.
+  blocked=0
+  declare -F _t_bg_rows >/dev/null 2>&1 &&
+    blocked=$(_t_bg_rows --cached 2>/dev/null | awk -F'\t' '$2 == "blocked"' | wc -l | tr -d ' ')
+  if [ "${blocked:-0}" -gt 0 ] && [ "${stuck:-0}" -eq 0 ]; then
+    tmux display-message "no agent is waiting on you — but $blocked background session(s) are (prefix + a)"
+  elif [ "${stuck:-0}" -gt 0 ]; then
     tmux display-message "no agent is waiting on you — but $stuck look stuck (prefix + a)"
   else
     tmux display-message "no agent is waiting on you"

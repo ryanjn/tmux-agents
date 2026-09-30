@@ -2,6 +2,34 @@
 
 Notable changes per release. Dates are the release date, newest first.
 
+## 0.4.7 — 2026-09-30
+
+**The agents that have no pane.** `/fork` starts a background session under
+Claude Code's supervisor rather than in a terminal — a real agent, working,
+entirely invisible to a console built on tmux panes.
+
+### Added
+
+- **Background sessions in the list.** `prefix + a` and `ta` show them under
+  *Background (no pane)*, with state (`◆` blocked, `●` running, `✓` done) and
+  age, from `claude agents --json`.
+- **Enter adopts one** — it gets a tmux session of its own running
+  `claude attach <id>` in its own folder, and is an ordinary agent from then on.
+  Attach, not `claude -r`: resuming a session the supervisor is still running
+  would put two conversations on one transcript.
+- **`⑂N` in the status line** for background sessions that are not done, and
+  `prefix + j` now names blocked ones instead of reporting an all-clear.
+
+### Notes
+
+- The listing is cached (`TMUX_AGENT_BG_TTL`, 10s) and stored already parsed.
+  The status line reads that cache and never refreshes it: it runs every five
+  seconds, and `claude agents` costs ~0.4s. A picker that shells out to another
+  CLI on every keystroke is a picker that stops opening when that CLI hangs.
+- Only `kind: background` rows are taken. The same listing carries `interactive`
+  rows, which are the agents already in panes — taking those would show every
+  agent twice, once truthfully and once from hearsay.
+
 ## 0.4.6 — 2026-09-24
 
 ### Fixed

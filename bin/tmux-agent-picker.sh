@@ -90,6 +90,22 @@ _list() {
                     printf "\t\t\t%s── %s %s%s\n", dim, $11, substr(rule, 1, 46 - length($11) * 2), off }
       { printf "%s\t%s\t%s\t%s %-4s %-5s %-30s %s%s\n",
                $1, $2, $3, $4, $8, $10, $6, ($9 != "" ? $9 "  " : ""), $7 }'
+
+  # Background sessions last: they are agents, but they are not HERE. Field 1
+  # (the pane) is empty because there is no pane — field 2 carries "bg:<id>",
+  # which is what enter dispatches on. Every action that targets a pane already
+  # guards on field 1 being empty, so none of them can reach these by accident.
+  declare -F _t_bg_rows >/dev/null 2>&1 && _t_bg_rows |
+    awk -F'\t' -v dim="$(printf '\033[2m')" -v off="$(printf '\033[0m')" -v now="$(date +%s)" '
+      function age(s) {
+        if (s == "" || s + 0 <= 0) return ""
+        if (s < 60) return s "s"; if (s < 3600) return int(s / 60) "m"
+        if (s < 86400) return int(s / 3600) "h"; return int(s / 86400) "d"
+      }
+      NR == 1 { printf "\t\t\t%s── Background (no pane) ───────────────────%s\n", dim, off }
+      { printf "\tbg:%s\t%s\t%s %-4s %-5s %-30s %s%s\n",
+               $3, $5, $1, age($7 > 0 ? now - $7 : 0), "", substr($6, 1, 30), dim,
+               ($2 == "blocked" ? "waiting on you · enter adopts it" : $2 " · enter adopts it") off }'
 }
 
 # ---------------------------------------------------------------------------
@@ -347,6 +363,7 @@ while :; do
 
   pane=""
   cwd=""
+  _session=""
   if [ -n "$sel" ]; then
     IFS=$'\t' read -r pane _session cwd _rest <<< "$sel"
   fi
@@ -468,9 +485,16 @@ while :; do
   esac
 
   # Plain enter: jump to it. fzf exits non-zero on esc, so an empty selection here
-  # means "cancelled" — unless something WAS selected, which then can only be a
-  # group heading. That is a misclick, not a cancel, so go back to the list.
+  # means "cancelled" — unless something WAS selected, which is either a group
+  # heading (a misclick: go back to the list) or a background session, which
+  # enter adopts into a pane of its own.
   if [ -z "$pane" ]; then
+    case "${_session:-}" in
+      bg:*)
+        _request adopt "${_session#bg:}" "" "$query"
+        exit 0
+        ;;
+    esac
     [ -n "$sel" ] && continue
     exit 0
   fi

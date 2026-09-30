@@ -20,7 +20,7 @@ runs in a terminal.
  ▌ ○  web:claude2     Auditing the bundle    │   6    for (let i = 0; …
 ```
 
-`◆` needs you · `⊘` stuck · `●` working · `○` idle
+`◆` needs you · `⊘` stuck · `●` working · `○` idle · `⑂` background (no pane)
 
 ![Every agent and what it is doing, favorites, and what a snapshot holds](docs/demo/tour.gif)
 
@@ -328,6 +328,28 @@ Scratch dirs live under `~/.cache`, deliberately not `$TMPDIR`: macOS purges
 out from under it. `~/.cache` survives until something here removes it, which also
 leaves `tq gc` something to find after a crash.
 
+### Background sessions — `/fork` shows up here
+
+`/fork` in Claude Code copies your conversation into a **background session**: it
+runs under Claude Code's own supervisor, not in a terminal, so it has no pane —
+and until now this console could not see it at all. A real agent, doing real
+work, invisible to the one place that is supposed to know about your agents.
+
+They now appear in `prefix + a` and `ta` under **Background (no pane)**, with
+their state (`◆` blocked on you, `●` running, `✓` done) and how long they have
+been going. **Enter adopts one**: it gets a tmux session of its own, in its own
+folder, running `claude attach <id>`. From that moment it is an ordinary agent
+here — a title, a glyph, a row, a place in the jump queue, and it sleeps and
+restores like the rest.
+
+`prefix + j` counts them too: with nothing in a pane waiting but a fork blocked
+on you, it says so instead of reporting an all-clear.
+
+The listing comes from `claude agents --json`, cached for
+`TMUX_AGENT_BG_TTL` seconds (10) because that call costs ~0.4s. The status line
+only ever reads the cache — it runs every five seconds and must not pay for it —
+so a `⑂N` count there can be a few seconds stale. The picker and `ta` refresh.
+
 ### Quick jobs — `prefix + Q`, `tj`
 
 Most asks don't need an agent you sit with. `prefix + Q` opens a one-line prompt;
@@ -459,6 +481,8 @@ Set these before the helpers are sourced (i.e. above the marker block in your rc
 | `TMUX_AGENT_NOTIFY` | *(off)* | `1` sends a desktop notification the moment an agent starts waiting. Prefer `tmux set -g @agent-notify 1`, which applies to agents already running |
 | `TMUX_AGENT_NOTIFY_CMD` | *(auto)* | Your own notifier, called as `CMD TITLE MESSAGE`. Otherwise terminal-notifier, osascript, or notify-send |
 | `TMUX_AGENT_BUSY_PROCS` | `8` | How many processes an agent must have spawned before it's flagged `⚙N` |
+| `TMUX_AGENT_BG_TTL` | `10` | Seconds a `claude agents` listing is cached for. The status line never refreshes it |
+| `TMUX_AGENT_CLAUDE_BIN` | `claude` | The binary `adopt` runs as `<bin> attach <id>` |
 | `TMUX_AGENT_STUCK_MINS` | `10` | Minutes of *both* pane silence and transcript silence before a working agent is flagged `⊘` stuck. `0` turns it off |
 | `TMUX_AGENT_CTX_WINDOW` | *(off)* | Your context window in tokens. Set it and context shows as `73%` instead of `736k` |
 | `T_AGENT_LAYOUT` | `tiled` | Layout for windows holding several agents (`even-horizontal`, `tiled`, …, or `none` to leave it alone) |

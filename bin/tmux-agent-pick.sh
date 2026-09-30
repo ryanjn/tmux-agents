@@ -57,6 +57,7 @@ fi
 #     kill   <pane> <label> <query>   ask, then kill
 #     rename <pane> <name>  <query>   ask for a new name, then rename
 #     new  <query> - <query>          name it, asking only if the query was empty
+#     adopt  <bg-id> - <query>        give a background session a pane
 #
 # An empty file means "nothing to do" — Esc, or an action the picker finished by
 # itself (jump, alongside, files).
@@ -148,6 +149,13 @@ while :; do
       # Creating an agent switches the client to it, so this is the end of the
       # loop either way. Cancelling the dialog just stops.
       [ -n "$name" ] && "$DO" new "$name"
+      break
+      ;;
+
+    adopt)
+      # A background session (`/fork`, `claude --bg`) getting a pane of its own.
+      # Like `new`, this switches the client, so the loop ends either way.
+      [ -n "$arg1" ] && "$DO" adopt "$arg1"
       break
       ;;
 

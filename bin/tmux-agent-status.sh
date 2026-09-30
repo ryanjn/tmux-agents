@@ -47,6 +47,15 @@ out="$out$(printf '#[fg=colour41]●%d #[fg=colour244]○%d' "$working" "$idle")
 # Dimmest of all: asleep agents cost nothing and want nothing. Worth a number
 # only so the fleet's real size stays visible once most of it is asleep.
 [ "$asleep" -gt 0 ] && out="$out$(printf ' #[fg=colour240]☾%d' "$asleep")"
+# Background sessions (`/fork`) that are still live or still want something. From
+# the CACHE only — `claude agents` costs ~0.4s and this runs every 5 seconds.
+# Stale by a few seconds is the right trade for a status line; the picker and
+# `ta` are the ones that refresh.
+if declare -F _t_bg_rows >/dev/null 2>&1; then
+  bg=$(_t_bg_rows --cached 2>/dev/null | awk -F'\t' '$2 != "done" { n++ } END { print n+0 }')
+  [ "${bg:-0}" -gt 0 ] && out="$out$(printf ' #[fg=colour109]⑂%d' "$bg")"
+fi
+
 # Quick jobs: ⚡ running, ✉ finished and unread. Silent when there are none.
 out="$out$("$(dirname "${BASH_SOURCE[0]}")/tmux-quick-job.sh" --status 2>/dev/null)"
 printf '%s#[default]' "$out"

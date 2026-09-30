@@ -194,6 +194,41 @@ check "waking an already-woken agent is a no-op" \
 check "a session that never held an agent is untouched" \
   "[ -z \"\$(T_RESUME=\"\$FAKE_RESUME\" _t_wake_session plain)\" ]"
 
+printf '\nadopting a background session\n'
+# A `/fork` runs under Claude Code's supervisor with no pane. Adopting it means
+# giving it one — a session of its own running `claude attach <id>`. The listing
+# is a fixture (so no real `claude agents` call) and the binary is a stub (so
+# nothing attaches to a real conversation); what is under test is that a pane
+# appears, in the right folder, running the right command.
+BGDIR=$(mktemp -d); mkdir -p "$BGDIR/work"
+printf '◆\tblocked\tbg123456\tsid-x\t%s\tTeach the parser about commas\t%s\n' \
+  "$BGDIR/work" "$(date +%s)" > "$BGDIR/background.tsv"
+cat > "$BGDIR/fakeclaude" <<'FAKE'
+#!/usr/bin/env bash
+printf '\033]2;⠂ attached to %s\007' "${2:-?}"
+while :; do sleep 1; done
+FAKE
+chmod +x "$BGDIR/fakeclaude"
+
+TMUX_AGENT_BG_CACHE="$BGDIR/background.tsv" TMUX_AGENT_CLAUDE_BIN="$BGDIR/fakeclaude" \
+  "$ROOT/bin/tmux-agent-do.sh" adopt bg123456 >/dev/null 2>&1
+sleep 1.5
+adopted=$(t_ list-sessions -F '#{session_name}' 2>/dev/null | grep -i 'bg123456' | head -1)
+check "adopt gives the background session a tmux session of its own" "[ -n '$adopted' ]"
+check "it runs in the folder the background session was working in" \
+  "[ \"\$(t_ list-panes -t '$adopted' -F '#{pane_current_path}' 2>/dev/null | head -1)\" = \"\$(cd '$BGDIR/work' && pwd -P)\" ]"
+check "window 1 attaches to that id rather than resuming it" \
+  "t_ capture-pane -p -t '$adopted' 2>/dev/null | grep -q bg123456 ||
+   t_ list-panes -t '$adopted' -F '#{pane_title}' 2>/dev/null | grep -q bg123456"
+check "once adopted it is an ordinary agent, with a row like any other" \
+  "_t_agent_rows 2>/dev/null | grep -q '$adopted'"
+check "adopting it twice switches to the one that exists" \
+  "TMUX_AGENT_BG_CACHE='$BGDIR/background.tsv' TMUX_AGENT_CLAUDE_BIN='$BGDIR/fakeclaude' '$ROOT/bin/tmux-agent-do.sh' adopt bg123456 2>&1 | grep -qi 'already here' ||
+   [ \"\$(t_ list-sessions -F '#{session_name}' | grep -ci bg123456)\" = 1 ]"
+check "an id that is not in the listing is refused" \
+  "! TMUX_AGENT_BG_CACHE='$BGDIR/background.tsv' '$ROOT/bin/tmux-agent-do.sh' adopt nope9999 2>/dev/null"
+rm -rf "$BGDIR"
+
 printf '\nthe doctor sees through the title contract\n'
 # The failure this release exists for: a pane that is plainly an agent by every
 # other measure, whose title no longer matches. Detection must not call this

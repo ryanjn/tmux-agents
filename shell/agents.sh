@@ -23,7 +23,7 @@
 # command, and `t` is a popular alias. Check with `type t` before sourcing, or
 # see the README for how to load only the tmux keybindings.
 
-TMUX_AGENTS_VERSION="0.4.6"
+TMUX_AGENTS_VERSION="0.4.7"
 
 command -v tmux >/dev/null 2>&1 || return 0
 
@@ -427,6 +427,7 @@ FAVORITES           the agents you start often, in ~/.config/tmux-agents/favorit
 AGENTS
   ta                   every agent: live status, context used, and its task
                        ● working  ⊘ stuck  ○ idle  ◆ waiting on you  ☾ asleep  ◇ other CLI
+                       ⑂ a background session (/fork) — no pane yet; enter adopts it
   ts [NAME]            a second agent beside this one, same folder
   ts -s [NAME]         the same, but split into this window
 
@@ -483,6 +484,7 @@ KNOBS               environment, set before the shell sources these
   T_AGENT_LAYOUT       layout for shared windows (even-horizontal, tiled, …, none)
   TMUX_AGENT_CTX_WINDOW    context size, if you want ta to show % rather than tokens
   TMUX_AGENT_STUCK_MINS    silent this long while "working" = ⊘ stuck (10; 0 off)
+  TMUX_AGENT_BG_TTL        how long `claude agents` output is cached (10s)
   TMUX_AGENT_SLEEP_HOURS / _SHUTDOWN_HOURS / _BATTERY_SLEEP_PCT      48 / 168 / 10
   tmux set -g @agent-notify 1     desktop notification when an agent waits on you
 
@@ -1418,6 +1420,112 @@ _t_waited_for() {
   printf '%s' "$(( _T_NOW - m ))"
 }
 
+# _t_mtime FILE — mtime in epoch seconds, or 0. stat's flags differ by platform
+# and neither build accepts the other's.
+_t_mtime() {
+  local m
+  m=$(stat -f %m "$1" 2>/dev/null) || m=$(stat -c %Y "$1" 2>/dev/null) || m=0
+  case "$m" in ''|*[!0-9]*) m=0 ;; esac
+  printf '%s' "$m"
+}
+
+# ---------------------------------------------------------------------------
+# Background sessions — the agents that have no pane
+# ---------------------------------------------------------------------------
+# `/fork` (and `claude --bg`) start a session that runs under Claude Code's own
+# supervisor rather than in a terminal. It is a real agent doing real work, with
+# a session id and a conversation, and this console could not see it at all:
+# everything here is built on tmux panes, and a background session has none.
+#
+# `claude agents --json` is the supported way to ask. Rows look like:
+#
+#   {"id":"e6f1a665","kind":"background","cwd":"/…","name":"…",
+#    "state":"blocked","status":"idle","startedAt":1790794481894}
+#
+# Only `kind: background` is taken. The same listing carries `kind: interactive`
+# rows, which are the agents already sitting in panes — taking those would show
+# every agent twice, once truthfully and once from hearsay.
+#
+# ⚠️  Cached, because this shells out to `claude` and that costs ~0.4s. The
+# status line runs every 5 seconds and must never pay it: it reads the cache and
+# accepts that it can be a few seconds stale. Only the picker and `ta` refresh.
+: "${TMUX_AGENT_BG_TTL:=10}"
+
+# $TMUX_AGENT_BG_CACHE is a test seam: point it at a fixture and no `claude` is
+# ever run. Nothing outside the suite sets it.
+# $TMUX_AGENT_BG_CACHE is a test seam: point it at a fixture and no `claude` is
+# ever run. Nothing outside the suite sets it.
+_t_bg_cache() { printf '%s' "${TMUX_AGENT_BG_CACHE:-$HOME/.cache/tmux-agent-status/background.tsv}"; }
+
+# _t_bg_refresh — re-ask `claude agents` if the cache is older than the TTL, and
+# store the PARSED rows rather than the JSON.
+#
+# ⚠️  Parsed at write time on purpose. The status line reads this every 5
+# seconds, and json.load in python3 there would be a ~40ms interpreter start for
+# a file that changes at most every TTL seconds. Written whole via a temp file so
+# a reader never sees half a listing.
+_t_bg_refresh() {
+  local cache tmp
+  cache=$(_t_bg_cache)
+  command -v claude >/dev/null 2>&1 || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  mkdir -p "${cache%/*}" 2>/dev/null
+  if [ -f "$cache" ] && [ $(( $(date +%s) - $(_t_mtime "$cache") )) -lt "${TMUX_AGENT_BG_TTL:-10}" ]; then
+    return 0
+  fi
+  tmp="$cache.tmp.$$"
+  if claude agents --json 2>/dev/null | python3 -c '
+import json, sys
+# One place decides what a state means. Anything unrecognised keeps its own word
+# and a neutral glyph rather than being forced into one of ours — a new state in
+# a future Claude Code should read as "something else", not as a wrong guess.
+GLYPH = {"blocked": "◆", "running": "●", "working": "●",
+         "done": "✓", "failed": "✗", "error": "✗"}
+try:
+    rows = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+if not isinstance(rows, list):
+    sys.exit(1)
+out = []
+for r in rows:
+    if not isinstance(r, dict) or r.get("kind") != "background":
+        continue
+    state = (r.get("state") or r.get("status") or "").lower()
+    if r.get("status") == "busy":
+        state = "running"
+    started = r.get("startedAt") or 0
+    try:
+        started = int(float(started) / 1000)
+    except Exception:
+        started = 0
+    out.append("\t".join(str(x) for x in (
+        GLYPH.get(state, "⑂"), state or "background", r.get("id") or "",
+        r.get("sessionId") or "", r.get("cwd") or "",
+        " ".join(str(r.get("name") or "").split()), started)))
+sys.stdout.write("\n".join(out) + ("\n" if out else ""))
+' > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$cache" 2>/dev/null
+  else
+    # An empty listing is a real answer ("no background sessions") and must still
+    # refresh the cache, or every reader re-asks and pays the 0.4s again.
+    [ -f "$tmp" ] && [ ! -s "$tmp" ] && mv "$tmp" "$cache" 2>/dev/null
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+
+# _t_bg_rows [--cached] — one row per background session:
+#
+#   glyph  state  id  sessionId  cwd  name  started-epoch-seconds
+#
+# --cached never shells out, for callers on a timer.
+_t_bg_rows() {
+  [ "${1:-}" = --cached ] || _t_bg_refresh
+  cat "$(_t_bg_cache)" 2>/dev/null
+  return 0
+}
+
 # _t_restoring — sessions that are coming back after a reboot but do not exist
 # yet, one per line as "NAME<TAB>STATE":
 #
@@ -1619,6 +1727,23 @@ ta() {
     tput home 2>/dev/null
     tput ed 2>/dev/null
   fi
+
+  # Background sessions (`/fork`, `claude --bg`) have no pane, so they are not in
+  # _t_agent_display at all. Appended as their own group rather than mixed in:
+  # every column above describes a pane, and these have none. Same five-field
+  # shape as the rows above (group, glyph, state, label, task) so one `column -t`
+  # still aligns the whole table.
+  local bg
+  bg=$(_t_bg_rows 2>/dev/null | awk -F'\t' -v now="$(date +%s)" '
+    function age(s) {
+      if (s == "" || s + 0 <= 0) return ""
+      if (s < 60) return s "s"; if (s < 3600) return int(s / 60) "m"
+      if (s < 86400) return int(s / 3600) "h"; return int(s / 86400) "d"
+    }
+    { label = substr($6, 1, 30)
+      printf "Background\t%s\t%s %s\t%s\tclaude attach %s\n", $1, $2, age($7 > 0 ? now - $7 : 0), label, $3 }')
+  [ -n "$bg" ] && out="$out
+$bg"
 
   [ -z "$out" ] && { echo "no agents running"; return 1; }
   printf '%s\n' "$out" | column -t -s '	' | awk '

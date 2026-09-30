@@ -175,6 +175,55 @@ case "$cmd" in
     tmux display-message "started agent '$name'"
     ;;
 
+  adopt)
+    # Give a background session (a `/fork`, or anything from `claude --bg`) a
+    # pane, by running `claude attach <id>` in a session of its own. From that
+    # moment it is an ordinary agent here: it has a title, a glyph, a row, a
+    # place in the jump queue, and it sleeps and restores like the rest.
+    #
+    # ⚠️  Attach, not resume. `claude -r <session-id>` would open a SECOND
+    # conversation against a session the supervisor is still running, and the two
+    # would write over each other. The short id and `attach` are the supported
+    # door — see `claude attach --help`.
+    id="${1:-}"
+    [ -n "$id" ] || die "adopt: no background session id given"
+    declare -F _t_bg_rows >/dev/null 2>&1 || die "adopt: helpers not loaded"
+
+    row=$(_t_bg_rows --cached | awk -F'\t' -v i="$id" '$3 == i { print; exit }')
+    [ -n "$row" ] || { _t_bg_rows >/dev/null; row=$(_t_bg_rows --cached | awk -F'\t' -v i="$id" '$3 == i { print; exit }'); }
+    [ -n "$row" ] || die "adopt: no background session '$id'"
+
+    cwd=$(printf '%s' "$row" | cut -f5)
+    label=$(printf '%s' "$row" | cut -f6)
+    [ -d "$cwd" ] || cwd="$HOME"
+
+    # A background session's name is the prompt it was given, so it is prose, not
+    # a session name. Slugify a few words of it and keep the id on the end: the
+    # row you recognised stays recognisable, and two forks of one conversation
+    # cannot collide.
+    name=$(sanitize "$(printf '%s' "$label" | cut -c1-20)")
+    name="${name:-fork}-${id}"
+
+    if tmux has-session -t "=$name" 2>/dev/null; then
+      tmux display-message "'$name' is already here — switching"
+      _t_focus "$(tmux list-panes -s -t "=$name" -F '#{pane_id}' | head -1)"
+      exit 0
+    fi
+
+    _T_ORIGIN='adopted from a background session (/fork)'
+    T_AUTOSTART="${TMUX_AGENT_CLAUDE_BIN:-claude} attach $id"
+    err=$(mktemp) || die "adopt: no temp file"
+    pane=$(_t_new_session "$name" "$cwd" 2>"$err")
+    if [ -z "$pane" ]; then
+      reason=$(grep -v '^[[:space:]]*$' "$err" 2>/dev/null | tail -1)
+      rm -f "$err"
+      die "adopt: ${reason:-could not create '$name'}"
+    fi
+    rm -f "$err"
+    _t_focus "$pane" || true
+    tmux display-message "adopted '$id' as '$name'"
+    ;;
+
   rename)
     pane="${1:-}"
     new=$(sanitize "${2:-}")
